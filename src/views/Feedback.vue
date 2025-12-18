@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { createFeedback } from '@/api/feedback'
 
 const router = useRouter()
 
@@ -67,21 +68,29 @@ const submitFeedback = async () => {
   } catch (error) {
     return
   }
-  
+
   submitting.value = true
-  
+
   try {
-    // 模拟提交API
-    await new Promise(resolve => setTimeout(resolve, 2000))
-    
+    // 将表单整理为后端需要的 CreateFeedbackRequest
+    const payload = {
+      type: feedbackForm.value.type,
+      details: [
+        `【标题】${feedbackForm.value.title}`,
+        `【内容】${feedbackForm.value.content}`,
+        `【联系方式】${feedbackForm.value.contact || '未提供'}`
+      ].join('\n')
+    }
+
+    await createFeedback(payload)
+
     ElMessage.success('反馈提交成功！我们会尽快处理您的反馈。')
-    
+
     // 重置表单
     resetForm()
-    
   } catch (error) {
     console.error('提交反馈失败:', error)
-    ElMessage.error('提交失败，请重试')
+    ElMessage.error(error.message || '提交失败，请重试')
   } finally {
     submitting.value = false
   }
@@ -280,7 +289,7 @@ const goBack = () => {
 }
 
 .page-header {
-  margin-bottom: 24px;
+  margin-bottom: 20px;
 }
 
 .header-left {
@@ -291,6 +300,13 @@ const goBack = () => {
 
 .back-button {
   margin-top: 4px;
+  border-radius: 8px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+
+.back-button:hover {
+  transform: translateX(-2px);
 }
 
 .title-section {
@@ -298,31 +314,73 @@ const goBack = () => {
 }
 
 .page-title {
-  font-size: 28px;
+  font-size: 26px;
   color: #2c3e50;
-  margin: 0 0 8px 0;
+  margin: 0 0 6px 0;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.page-title .el-icon {
+  font-size: 26px;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  transform: translateY(1px);
 }
 
 .page-description {
   color: #64748b;
-  font-size: 16px;
+  font-size: 14px;
   margin: 0;
 }
 
 .feedback-content {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
+}
+
+.type-card,
+.form-card,
+.faq-card {
+  border-radius: 12px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
+  transition: all 0.3s ease;
+}
+
+.type-card:hover,
+.form-card:hover,
+.faq-card:hover {
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12);
+  transform: translateY(-1px);
+}
+
+.type-card :deep(.el-card__header),
+.form-card :deep(.el-card__header),
+.faq-card :deep(.el-card__header) {
+  background: linear-gradient(135deg, rgba(74, 222, 128, 0.05) 0%, rgba(34, 211, 238, 0.05) 100%);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  padding: 16px 20px;
+  border-radius: 12px 12px 0 0;
 }
 
 .card-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-weight: 600;
+  font-size: 16px;
+  color: #2c3e50;
+}
+
+.card-header .el-icon {
+  font-size: 18px;
+  color: #22d3ee;
 }
 
 .header-title {
@@ -341,35 +399,55 @@ const goBack = () => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 20px;
   border: 2px solid #e2e8f0;
   border-radius: 12px;
   cursor: pointer;
   transition: all 0.3s ease;
-  background: #fafbfc;
+  background: linear-gradient(135deg, #fafbfc 0%, #f8fafc 100%);
 }
 
 .type-item:hover {
   border-color: #22d3ee;
-  background: #ecfdf5;
+  background: linear-gradient(135deg, #ecfdf5 0%, #f0fdfa 100%);
   transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(34, 211, 238, 0.15);
 }
 
 .type-item.active {
   border-color: #22d3ee;
-  background: #ecfdf5;
-  box-shadow: 0 4px 12px rgba(34, 211, 238, 0.2);
+  background: linear-gradient(135deg, #ecfdf5 0%, #f0fdfa 100%);
+  box-shadow: 0 6px 20px rgba(34, 211, 238, 0.25);
+  transform: translateY(-2px);
 }
 
 .type-icon {
-  font-size: 32px;
+  font-size: 36px;
   margin-bottom: 4px;
 }
 
 .type-label {
-  font-weight: 500;
+  font-weight: 600;
   color: #2c3e50;
+  font-size: 15px;
+}
+
+.form-card :deep(.el-form-item__label) {
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.form-card :deep(.el-input__wrapper),
+.form-card :deep(.el-textarea__inner) {
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.form-card :deep(.el-input__wrapper:hover),
+.form-card :deep(.el-textarea__inner:hover) {
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.15);
 }
 
 .form-tip {
@@ -378,34 +456,90 @@ const goBack = () => {
   margin-top: 4px;
 }
 
+.form-card :deep(.el-upload-dragger) {
+  border-radius: 12px;
+  border: 2px dashed #cbd5e1;
+  background: linear-gradient(135deg, #f8fafc 0%, #f0fdf4 50%, #ecfeff 100%);
+  transition: all 0.3s ease;
+}
+
+.form-card :deep(.el-upload-dragger:hover) {
+  border-color: #22d3ee;
+  background: linear-gradient(135deg, #f0fdf4 0%, #ecfeff 50%, #f0f9ff 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(34, 211, 238, 0.15);
+}
+
 .upload-content {
-  padding: 40px 20px;
+  padding: 30px 20px;
   text-align: center;
 }
 
 .upload-icon {
-  font-size: 48px;
-  color: #22d3ee;
-  margin-bottom: 16px;
+  font-size: 40px;
+  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 12px;
 }
 
 .upload-text p {
-  margin: 8px 0;
+  margin: 6px 0;
+  font-size: 14px;
+}
+
+.upload-text em {
+  color: #22d3ee;
+  font-style: normal;
+  font-weight: 600;
 }
 
 .upload-tip {
   font-size: 12px;
-  color: #909399;
+  color: #94a3b8;
 }
 
 .form-actions {
   display: flex;
-  gap: 16px;
+  gap: 12px;
   justify-content: center;
+  margin-top: 4px;
+  padding-top: 20px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.form-actions .el-button {
+  min-width: 110px;
+  height: 40px;
+  border-radius: 8px;
+  font-weight: 600;
+  transition: all 0.3s ease;
+}
+
+.form-actions .el-button--primary {
+  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 100%);
+  border: none;
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.25);
+}
+
+.form-actions .el-button--primary:hover {
+  box-shadow: 0 4px 12px rgba(34, 211, 238, 0.35);
+  transform: translateY(-1px);
+}
+
+.form-actions .el-button--default {
+  border: 1px solid #e2e8f0;
+}
+
+.form-actions .el-button--default:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  transform: translateY(-1px);
 }
 
 .faq-card {
-  background: #fafbfc;
+  background: linear-gradient(135deg, #fafbfc 0%, #f8fafc 100%);
 }
 
 .faq-card :deep(.el-collapse-item__header) {

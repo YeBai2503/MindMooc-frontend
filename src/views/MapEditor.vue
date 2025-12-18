@@ -1,8 +1,9 @@
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import mermaid from 'mermaid'
+import { getMindmap } from '@/api/mindmap'
 
 const route = useRoute()
 const router = useRouter()
@@ -16,9 +17,9 @@ const loading = ref(false)
 const saving = ref(false)
 const hasChanges = ref(false)
 
-// 任务信息
+// 任务 / 导图信息
 const taskInfo = ref({
-  id: null,
+  id: null, // 对应 TaskId，便于返回详情页
   name: ''
 })
 
@@ -45,59 +46,28 @@ const directionOptions = [
   { label: '从右到左', value: 'RL' }
 ]
 
-// 模拟数据
-const mockData = {
-  id: 1,
-  name: '机器学习基础课程',
-  mermaidCode: `graph TD
-    A[机器学习] --> B[监督学习]
-    A --> C[无监督学习]
-    A --> D[强化学习]
-    
-    B --> E[分类]
-    B --> F[回归]
-    
-    E --> G[决策树]
-    E --> H[支持向量机]
-    E --> I[神经网络]
-    
-    F --> J[线性回归]
-    F --> K[多项式回归]
-    
-    C --> L[聚类]
-    C --> M[降维]
-    
-    L --> N[K-means]
-    L --> O[层次聚类]
-    
-    M --> P[PCA]
-    M --> Q[t-SNE]
-    
-    D --> R[Q-learning]
-    D --> S[策略梯度]`
-}
-
-// 获取任务数据
+// 根据导图ID获取导图数据
 const fetchTaskData = async () => {
   loading.value = true
-  
+
   try {
-    // 模拟API调用
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    
+    const mindmapId = route.params.id
+
+    // MindmapVO
+    const mindmap = await getMindmap(mindmapId)
+
     taskInfo.value = {
-      id: route.params.id,
-      name: mockData.name
+      id: mindmap.taskId,
+      name: mindmap.title
     }
-    
-    mermaidCode.value = mockData.mermaidCode
-    originalCode.value = mockData.mermaidCode
-    
+
+    mermaidCode.value = mindmap.mermaidCode || ''
+    originalCode.value = mindmap.mermaidCode || ''
+
     await renderPreview()
-    
   } catch (error) {
-    console.error('获取任务数据失败:', error)
-    ElMessage.error('加载失败')
+    console.error('获取导图数据失败:', error)
+    ElMessage.error(error.message || '加载失败')
   } finally {
     loading.value = false
   }
@@ -439,7 +409,7 @@ onMounted(() => {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #f5f7fa;
+  background: linear-gradient(135deg, #f8fafc 0%, #f0fdf4 50%, #ecfeff 100%);
 }
 
 .toolbar {
@@ -448,14 +418,24 @@ onMounted(() => {
   align-items: center;
   padding: 16px 24px;
   background: white;
-  border-bottom: 1px solid #e2e8f0;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border-bottom: 2px solid #e2e8f0;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
 }
 
 .toolbar-left {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+
+.back-button {
+  border-radius: 8px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+
+.back-button:hover {
+  transform: translateX(-2px);
 }
 
 .title-section {
@@ -467,12 +447,30 @@ onMounted(() => {
 .editor-title {
   margin: 0;
   font-size: 18px;
+  font-weight: 700;
   color: #2c3e50;
 }
 
 .task-name {
   font-size: 14px;
   color: #64748b;
+}
+
+.toolbar-right .el-button {
+  border-radius: 8px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+
+.toolbar-right .el-button--primary {
+  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 100%);
+  border: none;
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.25);
+}
+
+.toolbar-right .el-button--primary:hover {
+  box-shadow: 0 4px 12px rgba(34, 211, 238, 0.35);
+  transform: translateY(-1px);
 }
 
 .editor-content {
@@ -495,6 +493,26 @@ onMounted(() => {
 .config-card,
 .template-card {
   flex-shrink: 0;
+  border-radius: 12px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
+  transition: all 0.3s ease;
+}
+
+.config-card:hover,
+.template-card:hover {
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12);
+  transform: translateY(-1px);
+}
+
+.config-card :deep(.el-card__header),
+.template-card :deep(.el-card__header) {
+  background: linear-gradient(135deg, rgba(74, 222, 128, 0.05) 0%, rgba(34, 211, 238, 0.05) 100%);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  padding: 14px 20px;
+  border-radius: 12px 12px 0 0;
+  font-weight: 600;
+  color: #2c3e50;
 }
 
 .config-row {
@@ -504,10 +522,33 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 
+.config-row :deep(.el-select__wrapper),
+.config-row :deep(.el-input__wrapper) {
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.config-row :deep(.el-select__wrapper:hover),
+.config-row :deep(.el-input__wrapper:hover) {
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.15);
+}
+
 .template-buttons {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.template-buttons .el-button {
+  border-radius: 8px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.template-buttons .el-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.15);
 }
 
 .code-editor-card {
@@ -515,6 +556,18 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
+}
+
+.code-editor-card :deep(.el-card__header) {
+  background: linear-gradient(135deg, rgba(74, 222, 128, 0.05) 0%, rgba(34, 211, 238, 0.05) 100%);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  padding: 14px 20px;
+  border-radius: 12px 12px 0 0;
+  font-weight: 600;
+  color: #2c3e50;
 }
 
 .code-editor-card :deep(.el-card__body) {
@@ -537,6 +590,16 @@ onMounted(() => {
   gap: 8px;
 }
 
+.editor-actions .el-button {
+  border-radius: 6px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.editor-actions .el-button:hover {
+  transform: translateY(-1px);
+}
+
 .code-editor {
   flex: 1;
   overflow: hidden;
@@ -553,7 +616,10 @@ onMounted(() => {
   font-size: 14px;
   line-height: 1.6;
   border: none;
-  box-shadow: none;
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  color: #e2e8f0;
+  padding: 20px;
+  border-radius: 0 0 12px 12px;
 }
 
 .preview-card {
@@ -561,6 +627,18 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
+}
+
+.preview-card :deep(.el-card__header) {
+  background: linear-gradient(135deg, rgba(74, 222, 128, 0.05) 0%, rgba(34, 211, 238, 0.05) 100%);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  padding: 14px 20px;
+  border-radius: 12px 12px 0 0;
+  font-weight: 600;
+  color: #2c3e50;
 }
 
 .preview-card :deep(.el-card__body) {
@@ -574,7 +652,7 @@ onMounted(() => {
 .preview-container {
   flex: 1;
   overflow: auto;
-  background: #fafbfc;
+  background: linear-gradient(135deg, #fafbfc 0%, #f8fafc 100%);
 }
 
 .preview-content {

@@ -1,90 +1,84 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import mermaid from 'mermaid'
+import { getTask } from '@/api/task'
+import { getMindmapByTask } from '@/api/mindmap'
 
 const route = useRoute()
 const router = useRouter()
 
-// 任务详情
+// 任务详情 + 导图信息
 const taskDetail = ref({
   id: null,
   name: '',
-  status: 'completed',
+  status: '',
   createTime: '',
   completeTime: '',
   videoUrl: '',
   mermaidCode: '',
-  description: ''
+  description: '',
+  mindmapId: null
 })
 
 const loading = ref(false)
 const videoRef = ref(null)
 const mermaidRef = ref(null)
 
+// 思维导图缩放
+const mindmapScale = ref(1)
+
 // 可调整大小相关状态
 const videoWidth = ref(50) // 视频区域宽度百分比
 const mindmapWidth = ref(50) // 思维导图区域宽度百分比
 const containerHeight = ref(500) // 容器高度
 const isResizing = ref(false)
-const isResizingHeight = ref(false)
 const startX = ref(0)
-const startY = ref(0)
 const startVideoWidth = ref(50)
-const startHeight = ref(500)
 
-// 模拟任务数据
-const mockTaskData = {
-  id: 1,
-  name: '机器学习基础课程',
-  status: 'completed',
-  createTime: '2024-01-15 14:30:00',
-  completeTime: '2024-01-15 14:35:00',
-  videoUrl: '/api/video/sample.mp4', // 模拟视频URL
-  description: '这是一个关于机器学习基础概念的教学视频，包含了监督学习、无监督学习等核心内容。',
-  mermaidCode: `graph TD
-    A[机器学习] --> B[监督学习]
-    A --> C[无监督学习]
-    A --> D[强化学习]
-    
-    B --> E[分类]
-    B --> F[回归]
-    
-    E --> G[决策树]
-    E --> H[支持向量机]
-    E --> I[神经网络]
-    
-    F --> J[线性回归]
-    F --> K[多项式回归]
-    
-    C --> L[聚类]
-    C --> M[降维]
-    
-    L --> N[K-means]
-    L --> O[层次聚类]
-    
-    M --> P[PCA]
-    M --> Q[t-SNE]
-    
-    D --> R[Q-learning]
-    D --> S[策略梯度]`
-}
-
-// 获取任务详情
+// 根据任务ID获取任务和导图详情
 const fetchTaskDetail = async () => {
   loading.value = true
   
   try {
-    // 模拟API调用
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    
-    taskDetail.value = { ...mockTaskData, id: route.params.id }
+    const taskId = route.params.id
+
+    // 1. 获取任务详情
+    const task = await getTask(taskId)
+
+    // 2. 获取导图（根据任务ID）
+    let mindmap = null
+    try {
+      mindmap = await getMindmapByTask(taskId)
+    } catch (e) {
+      // 如果导图还未生成，不影响任务详情展示
+      console.warn('获取思维导图失败或未生成:', e)
+    }
+
+    taskDetail.value = {
+      id: task.id,
+      name: task.title,
+      status: task.status,
+      createTime: task.createdAt,
+      completeTime: task.completedAt,
+      videoUrl: task.video?.storageUrl || '',
+      description: mindmap?.summary || task.requirement || '',
+      mermaidCode: mindmap?.mermaidCode || '',
+      mindmapId: mindmap?.id || null
+    }
+
+    // 等待 DOM 更新后重新加载视频
+    await nextTick()
+    if (videoRef.value && taskDetail.value.videoUrl) {
+      videoRef.value.load()
+    }
     
     // 渲染思维导图
     await renderMermaid()
-    
   } catch (error) {
     console.error('获取任务详情失败:', error)
+    ElMessage.error(error.message || '获取任务详情失败')
   } finally {
     loading.value = false
   }
@@ -116,15 +110,55 @@ const renderMermaid = async () => {
     const { svg } = await mermaid.render('mermaid-graph', taskDetail.value.mermaidCode)
     mermaidRef.value.innerHTML = svg
     
+    // 根据容器大小自动适配初始缩放
+    fitMindmapToContainer()
   } catch (error) {
     console.error('渲染思维导图失败:', error)
     mermaidRef.value.innerHTML = '<p style="color: #f56c6c;">思维导图渲染失败</p>'
   }
 }
 
+// 根据容器和 SVG 尺寸自动计算合适的初始缩放比例
+const fitMindmapToContainer = () => {
+  const container = mermaidRef.value?.parentElement
+  const svg = mermaidRef.value?.querySelector('svg')
+  if (!container || !svg) return
+
+  try {
+    const bbox = svg.getBBox()
+    if (!bbox.width || !bbox.height) {
+      mindmapScale.value = 1
+      return
+    }
+
+    const containerWidth = container.clientWidth
+    const containerHeight = container.clientHeight
+    const scaleX = containerWidth / (bbox.width + 40) // 预留一点边距
+    const scaleY = containerHeight / (bbox.height + 40)
+    const scale = Math.min(scaleX, scaleY, 1)
+
+    mindmapScale.value = scale > 0 ? scale : 1
+  } catch (e) {
+    console.warn('计算思维导图缩放失败:', e)
+    mindmapScale.value = 1
+  }
+}
+
+// 鼠标滚轮缩放思维导图
+const onMindmapWheel = (event) => {
+  const delta = event.deltaY > 0 ? -0.1 : 0.1
+  let next = mindmapScale.value + delta
+  next = Math.min(Math.max(next, 0.3), 2) // 限制缩放范围
+  mindmapScale.value = next
+}
+
 // 编辑思维导图
 const editMindMap = () => {
-  router.push(`/editor/${taskDetail.value.id}`)
+  if (!taskDetail.value.mindmapId) {
+    ElMessage.warning('当前任务暂未生成思维导图')
+    return
+  }
+  router.push(`/editor/${taskDetail.value.mindmapId}`)
 }
 
 // 下载思维导图
@@ -161,7 +195,7 @@ const goBack = () => {
   router.push('/history-task')
 }
 
-// 开始拖拽调整大小
+// 开始拖拽调整宽度
 const startResize = (e) => {
   // 在移动端禁用拖拽功能
   if (window.innerWidth <= 1024) {
@@ -201,69 +235,26 @@ const handleResize = (e) => {
   mindmapWidth.value = 100 - newVideoWidth
 }
 
-// 停止拖拽调整
+// 停止拖拽调整宽度
 const stopResize = () => {
   isResizing.value = false
-  isResizingHeight.value = false
   
   // 移除全局事件监听
   document.removeEventListener('mousemove', handleResize)
   document.removeEventListener('mouseup', stopResize)
   document.removeEventListener('touchmove', handleResize)
   document.removeEventListener('touchend', stopResize)
-  document.removeEventListener('mousemove', handleHeightResize)
-  document.removeEventListener('touchmove', handleHeightResize)
   
   // 恢复文本选择
   document.body.style.userSelect = ''
 }
 
-// 开始高度调整
-const startHeightResize = (e) => {
-  // 在移动端禁用拖拽功能
-  if (window.innerWidth <= 1024) {
-    return
-  }
-  
-  isResizingHeight.value = true
-  startY.value = e.clientY || e.touches[0].clientY
-  startHeight.value = containerHeight.value
-  
-  // 添加全局事件监听
-  document.addEventListener('mousemove', handleHeightResize)
-  document.addEventListener('mouseup', stopResize)
-  document.addEventListener('touchmove', handleHeightResize)
-  document.addEventListener('touchend', stopResize)
-  
-  // 防止选择文本
-  document.body.style.userSelect = 'none'
-  e.preventDefault()
-}
-
-// 处理高度调整
-const handleHeightResize = (e) => {
-  if (!isResizingHeight.value) return
-  
-  const currentY = e.clientY || e.touches[0].clientY
-  const deltaY = currentY - startY.value
-  
-  let newHeight = startHeight.value + deltaY
-  
-  // 限制最小和最大高度
-  const maxHeight = window.innerHeight * 0.85 // 屏幕高度的85%
-  const minHeight = 500
-  
-  newHeight = Math.max(minHeight, Math.min(maxHeight, newHeight))
-  
-  containerHeight.value = newHeight
-}
-
 onMounted(() => {
   fetchTaskDetail()
   
-  // 初始化容器高度为屏幕高度的60%，但不超过800px
-  const initialHeight = Math.min(window.innerHeight * 0.6, 800)
-  containerHeight.value = Math.max(initialHeight, 400) // 最小400px
+  // 初始化容器高度为屏幕高度的75%，但不超过850px
+  const initialHeight = Math.min(window.innerHeight * 0.75, 850)
+  containerHeight.value = Math.max(initialHeight, 500)
 })
 </script>
 
@@ -314,7 +305,6 @@ onMounted(() => {
                   ref="videoRef"
                   controls
                   class="video-player"
-                  :poster="'/api/video/poster.jpg'"
                 >
                   <source :src="taskDetail.videoUrl" type="video/mp4">
                   您的浏览器不支持视频播放。
@@ -354,20 +344,15 @@ onMounted(() => {
                 </div>
               </template>
               
-              <div class="mindmap-container">
-                <div ref="mermaidRef" class="mermaid-graph"></div>
+              <div class="mindmap-container" @wheel.prevent="onMindmapWheel">
+                <div
+                  ref="mermaidRef"
+                  class="mermaid-graph"
+                  :style="{ transform: `scale(${mindmapScale})` }"
+                ></div>
               </div>
             </el-card>
           </div>
-        </div>
-        
-        <!-- 高度拖拽分割线 -->
-        <div 
-          class="resize-handle resize-handle-height"
-          @mousedown="startHeightResize"
-          @touchstart="startHeightResize"
-        >
-          <div class="resize-line resize-line-horizontal"></div>
         </div>
       </div>
 
@@ -417,9 +402,9 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
   padding-bottom: 16px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 2px solid #e2e8f0;
 }
 
 .header-left {
@@ -430,6 +415,13 @@ onMounted(() => {
 
 .back-button {
   margin-top: 4px;
+  border-radius: 8px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+
+.back-button:hover {
+  transform: translateX(-2px);
 }
 
 .title-section {
@@ -438,6 +430,7 @@ onMounted(() => {
 
 .page-title {
   font-size: 24px;
+  font-weight: 700;
   color: #2c3e50;
   margin: 0 0 8px 0;
 }
@@ -456,6 +449,21 @@ onMounted(() => {
 .header-actions {
   display: flex;
   gap: 8px;
+  align-items: center;
+}
+
+.header-actions .el-button {
+  border-radius: 8px;
+  font-weight: 500;
+  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 100%);
+  border: none;
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.25);
+  transition: all 0.3s ease;
+}
+
+.header-actions .el-button:hover {
+  box-shadow: 0 4px 12px rgba(34, 211, 238, 0.35);
+  transform: translateY(-1px);
 }
 
 .detail-content {
@@ -465,8 +473,14 @@ onMounted(() => {
 
 .resizable-wrapper {
   border-radius: 12px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
   overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.resizable-wrapper:hover {
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12);
 }
 
 .resizable-container {
@@ -558,17 +572,75 @@ onMounted(() => {
   border-left: 1px solid #f0f0f0;
 }
 
+.layout-actions {
+  display: flex;
+  gap: 4px;
+  margin-right: 8px;
+}
+
+.export-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.video-card,
+.mindmap-card,
+.description-card,
+.code-card {
+  border-radius: 0;
+}
+
+.video-card :deep(.el-card__header),
+.mindmap-card :deep(.el-card__header),
+.description-card :deep(.el-card__header),
+.code-card :deep(.el-card__header) {
+  background: linear-gradient(135deg, rgba(74, 222, 128, 0.05) 0%, rgba(34, 211, 238, 0.05) 100%);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  padding: 14px 20px;
+}
+
+.description-card,
+.code-card {
+  border-radius: 12px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
+  transition: all 0.3s ease;
+}
+
+.description-card:hover,
+.code-card:hover {
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12);
+  transform: translateY(-1px);
+}
+
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   font-weight: 600;
+  font-size: 15px;
+  color: #2c3e50;
 }
 
 .header-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+}
+
+.header-title .el-icon {
+  font-size: 18px;
+  color: #22d3ee;
+}
+
+.header-actions .el-button {
+  border-radius: 6px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.header-actions .el-button:hover {
+  transform: translateY(-1px);
 }
 
 .video-container {
@@ -589,20 +661,20 @@ onMounted(() => {
 .mindmap-container {
   height: 100%;
   padding: 20px;
-  background: #fafbfc;
+  background: linear-gradient(135deg, #fafbfc 0%, #f8fafc 100%);
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .description-content {
-  padding: 0;
+  padding: 8px 0;
 }
 
 .description-content p {
   margin: 0;
-  color: #64748b;
+  color: #475569;
   line-height: 1.8;
   font-size: 15px;
 }
@@ -610,6 +682,7 @@ onMounted(() => {
 .mermaid-graph {
   width: 100%;
   overflow-x: auto;
+  transform-origin: top center;
 }
 
 .mermaid-graph :deep(svg) {
@@ -621,18 +694,20 @@ onMounted(() => {
   background: #f8fafc;
   border-radius: 8px;
   overflow: hidden;
+  border: 1px solid #e2e8f0;
 }
 
 .code-block {
   margin: 0;
   padding: 20px;
-  background: #2d3748;
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
   color: #e2e8f0;
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
   font-size: 14px;
   line-height: 1.6;
   overflow-x: auto;
   white-space: pre-wrap;
+  border-radius: 8px;
 }
 
 @media (max-width: 1024px) {

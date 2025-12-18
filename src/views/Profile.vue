@@ -1,37 +1,40 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { getCurrentUser, updateMe } from '@/api/user'
+import { listMyTasks } from '@/api/task'
+import { setToken } from '@/api/http'
 
 const router = useRouter()
 
 // 用户信息
 const userInfo = ref({
   avatar: '',
-  username: 'MindMooc用户',
-  email: 'user@mindmooc.com',
-  joinDate: '2024-01-01',
-  totalTasks: 15,
-  completedTasks: 12,
-  processingTasks: 2,
-  errorTasks: 1
+  username: '',
+  email: '',
+  joinDate: '',
+  totalTasks: 0,
+  completedTasks: 0,
+  processingTasks: 0,
+  errorTasks: 0
 })
 
 // 编辑状态
 const editMode = ref(false)
 const editForm = ref({
-  username: userInfo.value.username,
-  email: userInfo.value.email,
+  username: '',
+  email: '',
   password: '',
   confirmPassword: ''
 })
 
 // 统计数据
 const stats = ref([
-  { label: '总任务数', value: userInfo.value.totalTasks, icon: 'DataAnalysis', color: '#22d3ee' },
-  { label: '已完成', value: userInfo.value.completedTasks, icon: 'CircleCheck', color: '#4ade80' },
-  { label: '处理中', value: userInfo.value.processingTasks, icon: 'Loading', color: '#fbbf24' },
-  { label: '失败任务', value: userInfo.value.errorTasks, icon: 'CircleClose', color: '#f87171' }
+  { label: '总任务数', value: 0, icon: 'DataAnalysis', color: '#22d3ee' },
+  { label: '已完成', value: 0, icon: 'CircleCheck', color: '#4ade80' },
+  { label: '处理中', value: 0, icon: 'Loading', color: '#fbbf24' },
+  { label: '失败任务', value: 0, icon: 'CircleClose', color: '#f87171' }
 ])
 
 // 反馈功能
@@ -41,6 +44,48 @@ const feedbackAction = {
   icon: 'ChatDotRound',
   path: '/feedback',
   color: '#22d3ee'
+}
+
+// 从后端拉取用户信息
+const fetchUserInfo = async () => {
+  try {
+    const user = await getCurrentUser()
+    userInfo.value.username = user.username
+    userInfo.value.email = user.email
+    userInfo.value.joinDate = user.createdAt
+  } catch (error) {
+    console.error('获取用户信息失败:', error)
+    ElMessage.error(error.message || '获取用户信息失败')
+  }
+}
+
+// 从后端拉取任务统计（简单统计）
+const fetchTaskStats = async () => {
+  try {
+    // 这里取前 100 条任务做简单统计，如有需要可改为后端聚合接口
+    const page = await listMyTasks({ pageNum: 1, pageSize: 100 })
+    const records = Array.isArray(page?.records) ? page.records : []
+
+    const total = page?.total ?? records.length
+    const completed = records.filter((t) => t.status === 'completed').length
+    const processing = records.filter((t) => t.status === 'processing' || t.status === 'pending').length
+    const failed = records.filter((t) => t.status === 'failed').length
+
+    userInfo.value.totalTasks = total
+    userInfo.value.completedTasks = completed
+    userInfo.value.processingTasks = processing
+    userInfo.value.errorTasks = failed
+
+    stats.value = [
+      { label: '总任务数', value: total, icon: 'DataAnalysis', color: '#22d3ee' },
+      { label: '已完成', value: completed, icon: 'CircleCheck', color: '#4ade80' },
+      { label: '处理中', value: processing, icon: 'Loading', color: '#fbbf24' },
+      { label: '失败任务', value: failed, icon: 'CircleClose', color: '#f87171' }
+    ]
+  } catch (error) {
+    console.error('获取任务统计失败:', error)
+    ElMessage.error(error.message || '获取任务统计失败')
+  }
 }
 
 // 开启编辑模式
@@ -55,19 +100,29 @@ const startEdit = () => {
 }
 
 // 保存用户信息
-const saveUserInfo = () => {
+const saveUserInfo = async () => {
   // 验证密码
   if (editForm.value.password && editForm.value.password !== editForm.value.confirmPassword) {
     ElMessage.error('两次输入的密码不一致')
     return
   }
-  
-  // 模拟保存
-  userInfo.value.username = editForm.value.username
-  userInfo.value.email = editForm.value.email
-  
-  editMode.value = false
-  ElMessage.success('保存成功！')
+
+  try {
+    await updateMe({
+      username: editForm.value.username,
+      email: editForm.value.email
+      // 密码修改暂未对接后端，仅做前端校验
+    })
+
+    userInfo.value.username = editForm.value.username
+    userInfo.value.email = editForm.value.email
+
+    editMode.value = false
+    ElMessage.success('保存成功！')
+  } catch (error) {
+    console.error('保存用户信息失败:', error)
+    ElMessage.error(error.message || '保存失败')
+  }
 }
 
 // 取消编辑
@@ -75,10 +130,22 @@ const cancelEdit = () => {
   editMode.value = false
 }
 
+// 退出登录：清空本地 token 并回到登录页
+const logout = () => {
+  setToken(null)
+  ElMessage.success('已退出登录')
+  router.push('/login')
+}
+
 // 跳转到反馈页面
 const goToFeedback = () => {
   router.push('/feedback')
 }
+
+onMounted(() => {
+  fetchUserInfo()
+  fetchTaskStats()
+})
 </script>
 
 <template>
@@ -103,10 +170,15 @@ const goToFeedback = () => {
                 <el-icon><Calendar /></el-icon>
                 加入时间：{{ userInfo.joinDate }}
               </p>
-              <el-button type="primary" @click="startEdit">
-                <el-icon><Edit /></el-icon>
-                编辑资料
-              </el-button>
+              <div class="info-actions">
+                <el-button type="primary" @click="startEdit">
+                  <el-icon><Edit /></el-icon>
+                  编辑资料
+                </el-button>
+                <el-button type="danger" plain @click="logout">
+                  退出登录
+                </el-button>
+              </div>
             </div>
 
             <div v-else class="info-edit">
@@ -204,7 +276,7 @@ const goToFeedback = () => {
         <div class="system-info">
           <div class="info-item">
             <span class="info-label">版本号：</span>
-            <span class="info-value">v1.0.0</span>
+            <span class="info-value">v1.1.0</span>
           </div>
           <div class="info-item">
             <span class="info-label">最后更新：</span>
@@ -227,33 +299,57 @@ const goToFeedback = () => {
 }
 
 .page-header {
-  margin-bottom: 24px;
+  margin-bottom: 20px;
   text-align: center;
+  padding: 12px 0;
 }
 
 .page-title {
-  font-size: 28px;
+  font-size: 26px;
   color: #2c3e50;
-  margin: 0 0 8px 0;
+  margin: 0 0 6px 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 10px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.page-title .el-icon {
+  font-size: 26px;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  transform: translateY(1px);
 }
 
 .page-description {
   color: #64748b;
-  font-size: 16px;
+  font-size: 14px;
   margin: 0;
 }
 
 .profile-content {
   display: grid;
-  gap: 24px;
+  gap: 20px;
 }
 
 .user-info-card {
   margin-bottom: 0;
+  border-radius: 12px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
+  transition: all 0.3s ease;
+}
+
+.user-info-card:hover {
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12);
+  transform: translateY(-1px);
+}
+
+.user-info-card :deep(.el-card__body) {
+  padding: 24px;
 }
 
 .user-info {
@@ -269,20 +365,60 @@ const goToFeedback = () => {
 .username {
   margin: 0 0 8px 0;
   font-size: 24px;
+  font-weight: 700;
   color: #2c3e50;
 }
 
 .email {
   margin: 0 0 8px 0;
   color: #64748b;
+  font-size: 15px;
 }
 
 .join-date {
-  margin: 0 0 16px 0;
+  margin: 0 0 20px 0;
   color: #909399;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.join-date .el-icon {
+  color: #22d3ee;
+}
+
+.info-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.info-actions .el-button {
+  border-radius: 8px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+
+.info-actions .el-button--primary {
+  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 100%);
+  border: none;
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.25);
+}
+
+.info-actions .el-button--primary:hover {
+  box-shadow: 0 4px 12px rgba(34, 211, 238, 0.35);
+  transform: translateY(-1px);
+}
+
+.info-actions .el-button--danger {
+  border-color: #f87171;
+}
+
+.info-actions .el-button--danger:hover {
+  background: #fee2e2;
+  border-color: #ef4444;
+  transform: translateY(-1px);
 }
 
 .info-edit {
@@ -301,11 +437,57 @@ const goToFeedback = () => {
   width: 100%;
 }
 
+.info-edit :deep(.el-input__wrapper) {
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.info-edit :deep(.el-input__wrapper:hover) {
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.15);
+}
+
+.info-edit .el-button {
+  border-radius: 8px;
+  font-weight: 500;
+}
+
+.info-edit .el-button--primary {
+  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 100%);
+  border: none;
+}
+
 .card-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-weight: 600;
+  font-size: 16px;
+  color: #2c3e50;
+}
+
+.card-header .el-icon {
+  font-size: 18px;
+  color: #22d3ee;
+}
+
+.stats-card {
+  border-radius: 12px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
+  transition: all 0.3s ease;
+}
+
+.stats-card:hover {
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12);
+  transform: translateY(-1px);
+}
+
+.stats-card :deep(.el-card__header) {
+  background: linear-gradient(135deg, rgba(74, 222, 128, 0.05) 0%, rgba(34, 211, 238, 0.05) 100%);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  padding: 16px 20px;
+  border-radius: 12px 12px 0 0;
 }
 
 .stats-grid {
@@ -317,31 +499,56 @@ const goToFeedback = () => {
 .stat-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 16px;
-  background: #f8fafc;
-  border-radius: 8px;
+  gap: 14px;
+  padding: 18px;
+  background: linear-gradient(135deg, #f8fafc 0%, #f0fdf4 100%);
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
   transition: all 0.3s ease;
 }
 
 .stat-item:hover {
-  background: #f0f9ff;
+  background: linear-gradient(135deg, #f0fdf4 0%, #ecfeff 100%);
+  border-color: #86efac;
   transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(34, 211, 238, 0.15);
 }
 
 .stat-icon {
-  font-size: 24px;
+  font-size: 28px;
+  display: flex;
+  align-items: center;
 }
 
 .stat-value {
-  font-size: 24px;
-  font-weight: 600;
+  font-size: 26px;
+  font-weight: 700;
   color: #2c3e50;
 }
 
 .stat-label {
   font-size: 14px;
   color: #64748b;
+  font-weight: 500;
+}
+
+.feedback-card {
+  border-radius: 12px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
+  transition: all 0.3s ease;
+}
+
+.feedback-card:hover {
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12);
+  transform: translateY(-1px);
+}
+
+.feedback-card :deep(.el-card__header) {
+  background: linear-gradient(135deg, rgba(74, 222, 128, 0.05) 0%, rgba(34, 211, 238, 0.05) 100%);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  padding: 16px 20px;
+  border-radius: 12px 12px 0 0;
 }
 
 .feedback-content {
@@ -354,18 +561,18 @@ const goToFeedback = () => {
   align-items: center;
   gap: 16px;
   padding: 20px;
-  border: 1px solid #e2e8f0;
+  border: 2px solid #e2e8f0;
   border-radius: 12px;
   cursor: pointer;
   transition: all 0.3s ease;
-  background: #fafbfc;
+  background: linear-gradient(135deg, #fafbfc 0%, #f8fafc 100%);
 }
 
 .feedback-item:hover {
   border-color: #22d3ee;
-  background: #ecfdf5;
+  background: linear-gradient(135deg, #ecfdf5 0%, #f0fdfa 100%);
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(34, 211, 238, 0.15);
+  box-shadow: 0 6px 20px rgba(34, 211, 238, 0.2);
 }
 
 .feedback-icon {
@@ -408,6 +615,25 @@ const goToFeedback = () => {
   transform: translateX(4px);
 }
 
+.system-card {
+  border-radius: 12px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
+  transition: all 0.3s ease;
+}
+
+.system-card:hover {
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12);
+  transform: translateY(-1px);
+}
+
+.system-card :deep(.el-card__header) {
+  background: linear-gradient(135deg, rgba(74, 222, 128, 0.05) 0%, rgba(34, 211, 238, 0.05) 100%);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  padding: 16px 20px;
+  border-radius: 12px 12px 0 0;
+}
+
 .system-info {
   display: flex;
   flex-direction: column;
@@ -417,8 +643,16 @@ const goToFeedback = () => {
 .info-item {
   display: flex;
   justify-content: space-between;
-  padding: 8px 0;
+  align-items: center;
+  padding: 12px 0;
   border-bottom: 1px solid #f0f0f0;
+  transition: all 0.2s ease;
+}
+
+.info-item:hover {
+  padding-left: 8px;
+  background: #f8fafc;
+  border-radius: 6px;
 }
 
 .info-item:last-child {
@@ -427,11 +661,12 @@ const goToFeedback = () => {
 
 .info-label {
   color: #64748b;
+  font-weight: 500;
 }
 
 .info-value {
   color: #2c3e50;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 @media (max-width: 768px) {

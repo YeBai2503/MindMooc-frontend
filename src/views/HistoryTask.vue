@@ -1,6 +1,8 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { listMyTasks } from '@/api/task'
 
 const router = useRouter()
 
@@ -13,85 +15,57 @@ const currentPage = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
 
-// 状态选项
+// 状态选项（与后端状态保持一致：pending / processing / completed / failed）
 const statusOptions = [
   { label: '全部状态', value: '' },
+  { label: '排队中', value: 'pending' },
   { label: '处理中', value: 'processing' },
   { label: '已完成', value: 'completed' },
-  { label: '处理失败', value: 'error' }
+  { label: '处理失败', value: 'failed' }
 ]
 
-// 模拟数据
-const mockTasks = [
-  {
-    id: 1,
-    name: '机器学习基础课程',
-    status: 'completed',
-    createTime: '2024-01-15 14:30:00',
-    completeTime: '2024-01-15 14:35:00',
-    fileSize: '125.6MB',
-    duration: '45:30'
-  },
-  {
-    id: 2,
-    name: 'Vue3实战教程',
-    status: 'completed',
-    createTime: '2024-01-14 10:20:00',
-    completeTime: '2024-01-14 10:28:00',
-    fileSize: '89.2MB',
-    duration: '32:15'
-  },
-  {
-    id: 3,
-    name: 'Python数据分析',
-    status: 'processing',
-    createTime: '2024-01-13 16:45:00',
-    completeTime: null,
-    fileSize: '234.8MB',
-    duration: '78:20'
-  },
-  {
-    id: 4,
-    name: '深度学习入门',
-    status: 'error',
-    createTime: '2024-01-12 09:15:00',
-    completeTime: null,
-    fileSize: '156.3MB',
-    duration: '52:40'
-  }
-]
-
-// 获取任务列表
+// 从后端获取任务列表
 const fetchTasks = async () => {
   loading.value = true
-  
+
   try {
-    // 模拟API调用
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    
-    let filteredTasks = [...mockTasks]
-    
-    // 搜索过滤
+    const params = {
+      pageNum: currentPage.value,
+      pageSize: pageSize.value
+    }
+
+    const page = await listMyTasks(params)
+
+    // IPage<TaskVO>
+    total.value = page?.total ?? 0
+    const records = Array.isArray(page?.records) ? page.records : []
+
+    // 本地搜索 / 状态过滤（在当前页内过滤）
+    let filtered = records
+
     if (searchKeyword.value) {
-      filteredTasks = filteredTasks.filter(task =>
-        task.name.toLowerCase().includes(searchKeyword.value.toLowerCase())
+      const keyword = searchKeyword.value.toLowerCase()
+      filtered = filtered.filter((task) =>
+        (task.title || '').toLowerCase().includes(keyword)
       )
     }
-    
-    // 状态过滤
+
     if (statusFilter.value) {
-      filteredTasks = filteredTasks.filter(task => task.status === statusFilter.value)
+      filtered = filtered.filter((task) => task.status === statusFilter.value)
     }
-    
-    total.value = filteredTasks.length
-    
-    // 分页
-    const start = (currentPage.value - 1) * pageSize.value
-    const end = start + pageSize.value
-    taskList.value = filteredTasks.slice(start, end)
-    
+
+    taskList.value = filtered.map((task) => ({
+      id: task.id,
+      name: task.title,
+      status: task.status,
+      createTime: task.createdAt,
+      completeTime: task.completedAt,
+      fileSize: task.video?.fileSize ?? 0,
+      duration: task.video?.duration ?? 0
+    }))
   } catch (error) {
     console.error('获取任务列表失败:', error)
+    ElMessage.error(error.message || '获取任务列表失败')
   } finally {
     loading.value = false
   }
@@ -122,28 +96,13 @@ const viewTask = (taskId) => {
   router.push(`/task/${taskId}`)
 }
 
-// 删除任务
-const deleteTask = async (taskId) => {
-  try {
-    // 模拟删除API
-    await new Promise(resolve => setTimeout(resolve, 500))
-    
-    const index = taskList.value.findIndex(task => task.id === taskId)
-    if (index > -1) {
-      taskList.value.splice(index, 1)
-      total.value--
-    }
-  } catch (error) {
-    console.error('删除任务失败:', error)
-  }
-}
-
 // 获取状态标签类型
 const getStatusType = (status) => {
   const statusMap = {
+    pending: 'info',
     processing: 'warning',
     completed: 'success',
-    error: 'danger'
+    failed: 'danger'
   }
   return statusMap[status] || ''
 }
@@ -151,9 +110,10 @@ const getStatusType = (status) => {
 // 获取状态文本
 const getStatusText = (status) => {
   const statusMap = {
+    pending: '排队中',
     processing: '处理中',
     completed: '已完成',
-    error: '处理失败'
+    failed: '处理失败'
   }
   return statusMap[status] || '未知状态'
 }
@@ -162,6 +122,23 @@ const getStatusText = (status) => {
 const formatTime = (timeStr) => {
   if (!timeStr) return '-'
   return new Date(timeStr).toLocaleString('zh-CN')
+}
+
+// 格式化文件大小（字节 -> MB 文本）
+const formatFileSize = (size) => {
+  if (!size || size <= 0) return '-'
+  const mb = size / 1024 / 1024
+  return `${mb.toFixed(1)}MB`
+}
+
+// 格式化视频时长（秒 -> mm:ss）
+const formatDuration = (seconds) => {
+  if (!seconds || seconds <= 0) return '-'
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.floor(seconds % 60)
+  const mm = String(mins).padStart(2, '0')
+  const ss = String(secs).padStart(2, '0')
+  return `${mm}:${ss}`
 }
 
 onMounted(() => {
@@ -253,8 +230,16 @@ onMounted(() => {
           </template>
         </el-table-column>
 
-        <el-table-column prop="fileSize" label="文件大小" width="100" />
-        <el-table-column prop="duration" label="时长" width="100" />
+        <el-table-column prop="fileSize" label="文件大小" width="120">
+          <template #default="{ row }">
+            {{ formatFileSize(row.fileSize) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="duration" label="时长" width="100">
+          <template #default="{ row }">
+            {{ formatDuration(row.duration) }}
+          </template>
+        </el-table-column>
 
         <el-table-column prop="createTime" label="创建时间" width="180">
           <template #default="{ row }">
@@ -321,28 +306,52 @@ onMounted(() => {
 }
 
 .page-header {
-  margin-bottom: 24px;
+  margin-bottom: 20px;
   text-align: center;
+  padding: 12px 0;
 }
 
 .page-title {
-  font-size: 28px;
+  font-size: 26px;
   color: #2c3e50;
-  margin: 0 0 8px 0;
+  margin: 0 0 6px 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 10px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.page-title .el-icon {
+  font-size: 26px;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  transform: translateY(1px);
 }
 
 .page-description {
   color: #64748b;
-  font-size: 16px;
+  font-size: 14px;
   margin: 0;
 }
 
 .filter-card {
-  margin-bottom: 24px;
+  margin-bottom: 20px;
+  border-radius: 12px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
+  transition: all 0.3s ease;
+}
+
+.filter-card:hover {
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12);
+  transform: translateY(-1px);
+}
+
+.filter-card :deep(.el-card__body) {
+  padding: 20px;
 }
 
 .filter-row {
@@ -354,12 +363,78 @@ onMounted(() => {
 
 .search-group {
   display: flex;
-  gap: 16px;
+  gap: 12px;
+  flex: 1;
+}
+
+.search-group :deep(.el-input__wrapper) {
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.search-group :deep(.el-input__wrapper:hover) {
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.15);
+}
+
+.search-group :deep(.el-select__wrapper) {
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.search-group :deep(.el-select__wrapper:hover) {
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.15);
 }
 
 .action-group {
   display: flex;
-  gap: 8px;
+  gap: 10px;
+}
+
+.action-group .el-button {
+  border-radius: 8px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+
+.action-group .el-button--primary {
+  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 100%);
+  border: none;
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.25);
+}
+
+.action-group .el-button--primary:hover {
+  box-shadow: 0 4px 12px rgba(34, 211, 238, 0.35);
+  transform: translateY(-1px);
+}
+
+.action-group .el-button--default {
+  border: 1px solid #e2e8f0;
+}
+
+.action-group .el-button--default:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.task-list-card {
+  border-radius: 12px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
+  transition: all 0.3s ease;
+}
+
+.task-list-card:hover {
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12);
+  transform: translateY(-1px);
+}
+
+.task-list-card :deep(.el-card__header) {
+  background: linear-gradient(135deg, rgba(74, 222, 128, 0.05) 0%, rgba(34, 211, 238, 0.05) 100%);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  padding: 16px 20px;
+  border-radius: 12px 12px 0 0;
 }
 
 .card-header {
@@ -367,6 +442,8 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   font-weight: 600;
+  font-size: 16px;
+  color: #2c3e50;
 }
 
 .task-count {
@@ -375,10 +452,34 @@ onMounted(() => {
   font-weight: normal;
 }
 
+.task-list-card :deep(.el-table) {
+  border-radius: 0;
+}
+
+.task-list-card :deep(.el-table__header) {
+  background: #f8fafc;
+}
+
+.task-list-card :deep(.el-table__header th) {
+  background: #f8fafc;
+  color: #2c3e50;
+  font-weight: 600;
+  border-bottom: 2px solid #e2e8f0;
+}
+
+.task-list-card :deep(.el-table__row:hover) {
+  background: #f0fdf4;
+}
+
 .task-name {
   display: flex;
   align-items: center;
   gap: 8px;
+  font-weight: 500;
+}
+
+.task-name .el-icon {
+  color: #22d3ee;
 }
 
 .action-buttons {
@@ -388,10 +489,38 @@ onMounted(() => {
   justify-content: flex-start;
 }
 
+.action-buttons .el-button {
+  border-radius: 6px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.action-buttons .el-button--primary {
+  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 100%);
+  border: none;
+}
+
+.action-buttons .el-button--primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.3);
+}
+
+.action-buttons .el-button--danger:hover {
+  transform: translateY(-1px);
+}
+
 .pagination-wrapper {
   display: flex;
   justify-content: center;
-  margin-top: 24px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.pagination-wrapper :deep(.el-pagination) {
+  --el-pagination-button-color: #64748b;
+  --el-pagination-hover-color: #22d3ee;
+  --el-pagination-bg-color: #ffffff;
 }
 
 @media (max-width: 768px) {

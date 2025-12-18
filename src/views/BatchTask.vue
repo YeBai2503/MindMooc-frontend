@@ -234,28 +234,61 @@ const getStatusText = (status) => {
 }
 
 .page-header {
-  margin-bottom: 24px;
+  margin-bottom: 20px;
   text-align: center;
+  padding: 12px 0;
 }
 
 .page-title {
-  font-size: 28px;
+  font-size: 26px;
   color: #2c3e50;
-  margin: 0 0 8px 0;
+  margin: 0 0 6px 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 10px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.page-title .el-icon {
+  font-size: 26px;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  transform: translateY(1px);
 }
 
 .page-description {
   color: #64748b;
-  font-size: 16px;
+  font-size: 14px;
   margin: 0;
 }
 
-.task-config-card {
-  margin-bottom: 24px;
+.task-config-card,
+.upload-card,
+.task-list-card {
+  border-radius: 12px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
+  transition: all 0.3s ease;
+  margin-bottom: 20px;
+}
+
+.task-config-card:hover,
+.upload-card:hover,
+.task-list-card:hover {
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12);
+  transform: translateY(-1px);
+}
+
+.task-config-card :deep(.el-card__header),
+.upload-card :deep(.el-card__header),
+.task-list-card :deep(.el-card__header) {
+  background: linear-gradient(135deg, rgba(74, 222, 128, 0.05) 0%, rgba(34, 211, 238, 0.05) 100%);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  padding: 16px 20px;
+  border-radius: 12px 12px 0 0;
 }
 
 .task-config {
@@ -271,7 +304,7 @@ const getStatusText = (status) => {
 .config-label {
   font-weight: 600;
   color: #2c3e50;
-  font-size: 14px;
+  font-size: 15px;
   white-space: nowrap;
 }
 
@@ -280,8 +313,14 @@ const getStatusText = (status) => {
   margin-left: 2px;
 }
 
-.upload-card {
-  margin-bottom: 24px;
+.config-item :deep(.el-input__wrapper) {
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.config-item :deep(.el-input__wrapper:hover) {
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.15);
 }
 
 .card-header {
@@ -289,6 +328,8 @@ const getStatusText = (status) => {
   justify-content: space-between;
   align-items: center;
   font-weight: 600;
+  font-size: 16px;
+  color: #2c3e50;
 }
 
 .header-actions {
@@ -296,28 +337,69 @@ const getStatusText = (status) => {
   gap: 8px;
 }
 
+.header-actions .el-button {
+  border-radius: 8px;
+  font-weight: 500;
+}
+
 .batch-upload {
   width: 100%;
 }
 
+.batch-upload :deep(.el-upload-dragger) {
+  border-radius: 12px;
+  border: 2px dashed #cbd5e1;
+  background: linear-gradient(135deg, #f8fafc 0%, #f0fdf4 50%, #ecfeff 100%);
+  transition: all 0.3s ease;
+  padding: 30px 20px;
+}
+
+.batch-upload :deep(.el-upload-dragger:hover) {
+  border-color: #22d3ee;
+  background: linear-gradient(135deg, #f0fdf4 0%, #ecfeff 50%, #f0f9ff 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(34, 211, 238, 0.15);
+}
+
 .upload-content {
-  padding: 40px 20px;
+  padding: 10px;
   text-align: center;
 }
 
 .upload-icon {
-  font-size: 48px;
-  color: #22d3ee;
-  margin-bottom: 16px;
+  font-size: 40px;
+  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 12px;
 }
 
 .upload-text p {
-  margin: 8px 0;
+  margin: 6px 0;
+  font-size: 14px;
+}
+
+.upload-text em {
+  color: #22d3ee;
+  font-style: normal;
+  font-weight: 600;
 }
 
 .upload-tip {
   font-size: 12px;
-  color: #909399;
+  color: #94a3b8;
+}
+
+.task-list-card .card-header .el-button {
+  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 100%);
+  border: none;
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.25);
+}
+
+.task-list-card .card-header .el-button:hover {
+  box-shadow: 0 4px 12px rgba(34, 211, 238, 0.35);
+  transform: translateY(-1px);
 }
 
 .task-list {
@@ -330,15 +412,17 @@ const getStatusText = (status) => {
   display: flex;
   align-items: center;
   padding: 16px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fafbfc;
+  border: 2px solid #e2e8f0;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #fafbfc 0%, #f8fafc 100%);
   transition: all 0.3s ease;
 }
 
 .task-item:hover {
-  border-color: #22d3ee;
-  background: #ecfdf5;
+  border-color: #86efac;
+  background: linear-gradient(135deg, #ecfdf5 0%, #f0fdfa 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(34, 211, 238, 0.15);
 }
 
 .task-info {
@@ -349,9 +433,15 @@ const getStatusText = (status) => {
 .task-name {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-weight: 500;
-  margin-bottom: 4px;
+  gap: 10px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: #2c3e50;
+}
+
+.task-name .el-icon {
+  color: #22d3ee;
+  font-size: 18px;
 }
 
 .task-name span {
@@ -364,7 +454,7 @@ const getStatusText = (status) => {
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 12px;
+  font-size: 13px;
   color: #64748b;
 }
 
@@ -373,8 +463,36 @@ const getStatusText = (status) => {
   margin: 0 16px;
 }
 
+.task-progress :deep(.el-progress-bar__outer) {
+  border-radius: 10px;
+}
+
+.task-progress :deep(.el-progress-bar__inner) {
+  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 100%);
+}
+
 .task-actions {
   display: flex;
   gap: 8px;
+}
+
+.task-actions .el-button {
+  border-radius: 6px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.task-actions .el-button--primary {
+  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 100%);
+  border: none;
+}
+
+.task-actions .el-button--primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.3);
+}
+
+.task-actions .el-button--danger:hover {
+  transform: translateY(-1px);
 }
 </style>
