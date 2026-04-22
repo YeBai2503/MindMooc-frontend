@@ -2,52 +2,141 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { uploadVideo } from '@/api/video'
 import { createTask } from '@/api/task'
+import {
+  completeVideoUpload,
+  getFileSha256,
+  initVideoUpload,
+  uploadVideoToMinio
+} from '@/api/video'
+
+const getVideoDuration = (file) => {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video')
+    video.preload = 'metadata'
+
+    const objectUrl = URL.createObjectURL(file)
+
+    video.onloadedmetadata = () => {
+      const duration = video.duration
+      URL.revokeObjectURL(objectUrl)
+
+      if (!Number.isFinite(duration) || duration <= 0) {
+        reject(new Error('无法读取视频时长'))
+        return
+      }
+
+      resolve(duration)
+    }
+
+    video.onerror = () => {
+      URL.revokeObjectURL(objectUrl)
+      reject(new Error('视频时长解析失败'))
+    }
+
+    video.src = objectUrl
+  })
+}
 
 const router = useRouter()
 
-// 表单数据
 const form = ref({
   taskName: '',
   videoFile: null,
   description: ''
 })
 
-// 上传状态
 const uploading = ref(false)
+const uploadState = ref('idle')
+const uploadedVideoId = ref('')
+const uploadedVideoMeta = ref(null)
+const uploadError = ref('')
 
-// 文件上传处理（只在前端保存文件对象，不直接上传）
-// Element Plus 的 before-upload 回调参数是原始文件对象 rawFile
-const handleFileChange = (rawFile) => {
-  form.value.videoFile = rawFile
-  return false // 阻止 el-upload 自己发请求，改为我们手动调用 uploadVideo
+const uploadSelectedVideo = async (file) => {
+  if (!file) return
+
+  uploadState.value = 'uploading'
+  uploadError.value = ''
+  uploadedVideoId.value = ''
+  uploadedVideoMeta.value = null
+  form.value.videoFile = file
+
+  try {
+    const [fileHash, duration] = await Promise.all([
+      getFileSha256(file),
+      getVideoDuration(file)
+    ])
+
+    const initResult = await initVideoUpload({
+      filename: file.name,
+      mimeType: file.type || 'application/octet-stream',
+      videoTitle: form.value.taskName || file.name,
+      fileHash,
+      fileSize: file.size,
+      duration: Math.round(duration)
+    })
+
+    if (initResult?.duplicated && initResult?.videoId) {
+      uploadedVideoId.value = initResult.videoId
+      uploadedVideoMeta.value = { duplicated: true }
+      uploadState.value = 'success'
+      ElMessage.success('视频已存在，已直接关联到当前任务')
+      return false
+    }
+
+    if (!initResult?.uploadUrl || !initResult?.uploadId || !initResult?.objectKey) {
+      throw new Error('视频上传初始化失败')
+    }
+
+    await uploadVideoToMinio(initResult.uploadUrl, file)
+
+    const completedVideo = await completeVideoUpload({
+      uploadId: initResult.uploadId,
+      objectKey: initResult.objectKey
+    })
+
+    if (!completedVideo?.id) {
+      throw new Error('视频上传确认失败')
+    }
+
+    uploadedVideoId.value = completedVideo.id
+    uploadedVideoMeta.value = {
+      uploadId: initResult.uploadId,
+      objectKey: initResult.objectKey
+    }
+    uploadState.value = 'success'
+    ElMessage.success('视频上传完成')
+  } catch (error) {
+    console.error('视频上传失败:', error)
+    form.value.videoFile = null
+    uploadState.value = 'error'
+    uploadError.value = error?.message || '视频上传失败，请重试'
+    ElMessage.error(uploadError.value)
+  }
+
+  return false
 }
 
-// 提交任务：上传视频 -> 创建任务 -> 跳转详情
+const handleFileChange = (rawFile) => {
+  uploadSelectedVideo(rawFile)
+  return false
+}
+
 const submitTask = async () => {
   if (!form.value.taskName) {
     ElMessage.warning('请输入任务名称')
     return
   }
-  if (!form.value.videoFile) {
-    ElMessage.warning('请选择视频文件')
+  if (!form.value.videoFile || !uploadedVideoId.value || uploadState.value !== 'success') {
+    ElMessage.warning('请先上传完成视频')
     return
   }
 
   uploading.value = true
 
   try {
-    // 1. 上传视频
-    const video = await uploadVideo(form.value.videoFile, form.value.taskName)
-
-    if (!video?.id) {
-      throw new Error('视频上传结果异常')
-    }
-
-    // 2. 创建任务
     const task = await createTask({
-      videoId: video.id,
+      videoId: uploadedVideoId.value,
       title: form.value.taskName,
       requirement: form.value.description || '',
       taskType: 'common'
@@ -58,28 +147,25 @@ const submitTask = async () => {
     }
 
     ElMessage.success('任务创建成功，正在进入任务等待页')
-
-    // 如果任务已经是完成状态则直接跳详情，否则进入等待页轮询
-    if (task.status === 'completed') {
-      router.push(`/task/${task.id}`)
-    } else {
-      router.push(`/task/wait/${task.id}`)
-    }
+    router.push(task.status === 'completed' ? `/task/${task.id}` : `/task/wait/${task.id}`)
   } catch (error) {
     console.error('创建任务失败:', error)
-    ElMessage.error(error.message || '任务创建失败，请重试')
+    ElMessage.error(error?.message || '任务创建失败，请重试')
   } finally {
     uploading.value = false
   }
 }
 
-// 重置表单
 const resetForm = () => {
   form.value = {
     taskName: '',
     videoFile: null,
     description: ''
   }
+  uploadState.value = 'idle'
+  uploadedVideoId.value = ''
+  uploadedVideoMeta.value = null
+  uploadError.value = ''
 }
 </script>
 
@@ -95,7 +181,7 @@ const resetForm = () => {
 
     <el-card class="task-form-card" shadow="hover">
       <el-form :model="form" label-width="120px" size="large">
-        <el-form-item label="任务名称" required>
+        <el-form-item label="任务名称" required class="focus-item">
           <el-input
             v-model="form.taskName"
             placeholder="请输入任务名称"
@@ -113,29 +199,48 @@ const resetForm = () => {
             accept="video/*"
           >
             <div class="upload-content">
-              <el-icon class="upload-icon"><VideoPlay /></el-icon>
+              <el-icon class="upload-icon">
+                <Loading v-if="uploadState === 'uploading'" />
+                <VideoPlay v-else />
+              </el-icon>
               <div class="upload-text">
-                <p>将视频文件拖拽到此处，或<em>点击上传</em></p>
-                <p class="upload-tip">支持 MP4、AVI、MOV 等格式，文件大小不超过 500MB</p>
+                <p v-if="uploadState === 'uploading'">视频正在上传，请稍候...</p>
+                <p v-else>将视频文件拖拽到此处，或<em>点击上传</em></p>
+                <p class="upload-tip">支持 MP4等格式，文件大小不超过 500MB</p>
               </div>
             </div>
           </el-upload>
-          
-          <div v-if="form.videoFile" class="file-info">
-            <el-icon><Document /></el-icon>
-            <span>{{ form.videoFile.name }}</span>
-            <el-button type="text" @click="form.videoFile = null">
+
+          <div v-if="form.videoFile" class="file-info" :class="`file-info--${uploadState}`">
+            <el-icon>
+              <Loading v-if="uploadState === 'uploading'" />
+              <Document v-else />
+            </el-icon>
+            <span>
+              {{ form.videoFile.name }}
+              <em v-if="uploadState === 'uploading'">（上传中）</em>
+              <em v-else-if="uploadState === 'success'">（已完成）</em>
+              <em v-else-if="uploadState === 'error'">（上传失败）</em>
+            </span>
+            <el-button type="text" :disabled="uploadState === 'uploading'" @click="form.videoFile = null">
               <el-icon><Delete /></el-icon>
             </el-button>
           </div>
+          <div v-if="uploadState === 'uploading'" class="upload-loading-hint">
+            <el-icon class="loading-icon"><Loading /></el-icon>
+            <span>正在上传并处理视频，请勿关闭页面</span>
+          </div>
+          <div v-else-if="uploadState === 'error' && uploadError" class="upload-error-hint">
+            {{ uploadError }}
+          </div>
         </el-form-item>
 
-        <el-form-item label="任务描述">
+        <el-form-item label="任务要求" class="focus-item">
           <el-input
             v-model="form.description"
             type="textarea"
-            :rows="4"
-            placeholder="请输入任务描述（可选）"
+            :autosize="{ minRows: 4, maxRows: 8 }"
+            placeholder="请输入任务要求（可选）"
             maxlength="200"
             show-word-limit
           />
@@ -156,44 +261,13 @@ const resetForm = () => {
         </el-form-item>
       </el-form>
     </el-card>
-
-    <!-- 使用说明 -->
-    <el-card class="help-card" shadow="hover">
-      <template #header>
-        <div class="card-header">
-          <el-icon><QuestionFilled /></el-icon>
-          <span>使用说明</span>
-        </div>
-      </template>
-      <div class="help-content">
-        <ol>
-          <li>选择要分析的慕课视频文件</li>
-          <li>输入任务名称，便于后续管理</li>
-          <li>点击"创建任务"开始处理</li>
-          <li>系统将自动分析视频内容并生成思维导图</li>
-          <li>处理完成后可在任务详情页查看结果</li>
-        </ol>
-      </div>
-    </el-card>
   </div>
 </template>
 
 <style scoped>
 .new-task-container {
-  max-width: 800px;
+  max-width: 860px;
   margin: 0 auto;
-  animation: fadeIn 0.5s ease-in;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 .page-header {
@@ -204,20 +278,18 @@ const resetForm = () => {
 
 .page-title {
   font-size: 26px;
-  font-weight: 700;
   color: #2c3e50;
   margin: 0 0 6px 0;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  letter-spacing: -0.5px;
   line-height: 1;
+  font-weight: 700;
 }
 
 .page-title .el-icon {
   font-size: 26px;
-  color: #2c3e50;
   display: inline-flex;
   align-items: center;
   line-height: 1;
@@ -228,25 +300,24 @@ const resetForm = () => {
   color: #64748b;
   font-size: 14px;
   margin: 0;
-  font-weight: 400;
 }
 
 .task-form-card {
-  margin-bottom: 20px;
-  border-radius: 12px;
-  border: 1px solid rgba(226, 232, 240, 0.8);
-  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
+  margin-bottom: 8px;
+  border-radius: 14px;
+  border: 1px solid #e8eef5;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
   transition: all 0.3s ease;
   overflow: hidden;
 }
 
 .task-form-card:hover {
-  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
   transform: translateY(-1px);
 }
 
 .task-form-card :deep(.el-card__body) {
-  padding: 24px;
+  padding: 26px;
 }
 
 .task-form-card :deep(.el-form-item) {
@@ -255,18 +326,18 @@ const resetForm = () => {
 
 .task-form-card :deep(.el-form-item__label) {
   font-weight: 600;
-  color: #2c3e50;
+  color: #1f2937;
   font-size: 15px;
 }
 
 .task-form-card :deep(.el-input__wrapper) {
   border-radius: 10px;
   transition: all 0.3s ease;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
 }
 
 .task-form-card :deep(.el-input__wrapper:hover) {
-  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.15);
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.16);
 }
 
 .task-form-card :deep(.el-textarea__inner) {
@@ -276,7 +347,37 @@ const resetForm = () => {
 }
 
 .task-form-card :deep(.el-textarea__inner:hover) {
-  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.15);
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.16);
+}
+
+.task-form-card :deep(.focus-item .el-input__wrapper) {
+  box-shadow:
+    0 0 0 1px rgba(16, 185, 129, 0.28),
+    0 1px 3px rgba(15, 23, 42, 0.05);
+  background: #fbfffd;
+}
+
+.task-form-card :deep(.focus-item .el-input__wrapper:hover) {
+  box-shadow:
+    0 0 0 1px rgba(16, 185, 129, 0.38),
+    0 4px 12px rgba(16, 185, 129, 0.14);
+}
+
+.task-form-card :deep(.focus-item .el-textarea__inner) {
+  box-shadow:
+    0 0 0 1px rgba(16, 185, 129, 0.28),
+    0 1px 3px rgba(15, 23, 42, 0.05);
+  background: #fbfffd;
+  max-height: 260px;
+  overflow-y: auto;
+  resize: none;
+  transition: height 0.22s ease, box-shadow 0.22s ease, background-color 0.22s ease;
+}
+
+.task-form-card :deep(.focus-item .el-textarea__inner:hover) {
+  box-shadow:
+    0 0 0 1px rgba(16, 185, 129, 0.38),
+    0 4px 12px rgba(16, 185, 129, 0.14);
 }
 
 .video-upload {
@@ -290,17 +391,17 @@ const resetForm = () => {
 .video-upload :deep(.el-upload-dragger) {
   width: 100%;
   border-radius: 12px;
-  border: 2px dashed #cbd5e1;
-  background: linear-gradient(135deg, #f8fafc 0%, #f0fdf4 50%, #ecfeff 100%);
+  border: 2px dashed #cfe9de;
+  background: linear-gradient(135deg, #f9fdfb 0%, #f2fcf7 50%, #f4fdfc 100%);
   transition: all 0.3s ease;
   padding: 30px 20px;
 }
 
 .video-upload :deep(.el-upload-dragger:hover) {
-  border-color: #22d3ee;
-  background: linear-gradient(135deg, #f0fdf4 0%, #ecfeff 50%, #f0f9ff 100%);
+  border-color: #34d399;
+  background: linear-gradient(135deg, #f4fef9 0%, #ecfdf5 55%, #f0fdfa 100%);
   transform: translateY(-1px);
-  box-shadow: 0 4px 16px rgba(34, 211, 238, 0.15);
+  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.14);
 }
 
 .upload-content {
@@ -310,20 +411,11 @@ const resetForm = () => {
 
 .upload-icon {
   font-size: 40px;
-  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 100%);
+  background: linear-gradient(135deg, #34d399 0%, #14b8a6 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
   margin-bottom: 12px;
-}
-
-@keyframes pulse {
-  0%, 100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.05);
-  }
 }
 
 .upload-text {
@@ -338,7 +430,7 @@ const resetForm = () => {
 }
 
 .upload-text em {
-  color: #22d3ee;
+  color: #0f766e;
   font-style: normal;
   font-weight: 600;
 }
@@ -355,27 +447,38 @@ const resetForm = () => {
   gap: 10px;
   margin-top: 12px;
   padding: 10px 14px;
-  background: linear-gradient(135deg, #ecfdf5 0%, #f0fdfa 100%);
-  border: 2px solid #86efac;
+  background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
+  border: 1px solid #99f6e4;
   border-radius: 10px;
-  box-shadow: 0 2px 8px rgba(74, 222, 128, 0.15);
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.12);
   animation: slideIn 0.3s ease-out;
 }
 
-@keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.file-info--uploading {
+  border-color: #93c5fd;
+  background: linear-gradient(135deg, #eff6ff 0%, #f8fbff 100%);
+}
+
+.file-info--error {
+  border-color: #fca5a5;
+  background: linear-gradient(135deg, #fff1f2 0%, #fff7f7 100%);
+}
+
+.file-info--success {
+  border-color: #99f6e4;
 }
 
 .file-info .el-icon {
   font-size: 20px;
-  color: #4ade80;
+  color: #10b981;
+}
+
+.file-info--uploading .el-icon {
+  color: #3b82f6;
+}
+
+.file-info--error .el-icon {
+  color: #ef4444;
 }
 
 .file-info span {
@@ -383,6 +486,11 @@ const resetForm = () => {
   font-weight: 500;
   color: #2c3e50;
   font-size: 14px;
+}
+
+.file-info span em {
+  font-style: normal;
+  color: #64748b;
 }
 
 .file-info .el-button {
@@ -396,10 +504,46 @@ const resetForm = () => {
   transform: scale(1.1);
 }
 
+.upload-loading-hint,
+.upload-error-hint {
+  margin-top: 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.upload-loading-hint {
+  background: #eff6ff;
+  color: #2563eb;
+  border: 1px solid #bfdbfe;
+}
+
+.upload-error-hint {
+  background: #fff1f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+}
+
+.loading-icon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .form-actions {
   display: flex;
   gap: 12px;
-  justify-content: center;
+  justify-content: flex-end;
   margin-top: 4px;
   padding-top: 20px;
   border-top: 1px solid #e2e8f0;
@@ -414,106 +558,31 @@ const resetForm = () => {
 }
 
 .form-actions .el-button--default {
-  border: 2px solid #e2e8f0;
+  border: 1px solid #dbe5ef;
   color: #64748b;
 }
 
 .form-actions .el-button--default:hover {
   border-color: #cbd5e1;
   background: #f8fafc;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.1);
 }
 
 .form-actions .el-button--primary {
-  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 100%);
-  border: none;
-  box-shadow: 0 4px 15px rgba(34, 211, 238, 0.35);
+  background: linear-gradient(135deg, #4ade80 0%, #2dd4bf 48%, #22d3ee 100%);
+  border: 1px solid rgba(45, 212, 191, 0.24);
+  box-shadow: 0 8px 14px rgba(45, 212, 191, 0.18);
 }
 
 .form-actions .el-button--primary:hover {
-  box-shadow: 0 6px 20px rgba(34, 211, 238, 0.45);
-  transform: translateY(-2px);
+  box-shadow: 0 10px 18px rgba(45, 212, 191, 0.24);
+  transform: translateY(-1px);
+  filter: saturate(1.06) brightness(0.99);
 }
 
 .form-actions .el-button--primary:active {
   transform: translateY(0);
-}
-
-.help-card {
-  background: linear-gradient(135deg, #fafbfc 0%, #f8fafc 100%);
-  border-radius: 12px;
-  border: 1px solid rgba(226, 232, 240, 0.8);
-  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.06);
-  transition: all 0.3s ease;
-}
-
-.help-card:hover {
-  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.1);
-  transform: translateY(-1px);
-}
-
-.help-card :deep(.el-card__header) {
-  background: linear-gradient(135deg, rgba(74, 222, 128, 0.05) 0%, rgba(34, 211, 238, 0.05) 100%);
-  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
-  padding: 14px 20px;
-}
-
-.card-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  font-size: 15px;
-  color: #2c3e50;
-}
-
-.card-header .el-icon {
-  font-size: 18px;
-  color: #22d3ee;
-}
-
-.help-content {
-  padding: 4px 0;
-}
-
-.help-content ol {
-  margin: 0;
-  padding-left: 24px;
-  counter-reset: step-counter;
-}
-
-.help-content li {
-  margin: 10px 0;
-  color: #475569;
-  font-size: 14px;
-  line-height: 1.6;
-  position: relative;
-  padding-left: 6px;
-  list-style: none;
-  counter-increment: step-counter;
-}
-
-.help-content li::marker {
-  content: none;
-}
-
-.help-content li::before {
-  content: counter(step-counter);
-  position: absolute;
-  left: -24px;
-  top: 0;
-  width: 20px;
-  height: 20px;
-  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 100%);
-  color: white;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 700;
-  box-shadow: 0 2px 6px rgba(34, 211, 238, 0.3);
 }
 
 @media (max-width: 768px) {
@@ -522,16 +591,13 @@ const resetForm = () => {
     padding: 0 16px;
   }
 
-  .page-title {
-    font-size: 26px;
-  }
-
   .task-form-card :deep(.el-card__body) {
     padding: 24px 20px;
   }
 
   .form-actions {
     flex-direction: column;
+    justify-content: initial;
   }
 
   .form-actions .el-button {

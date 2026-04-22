@@ -1,8 +1,8 @@
 <script setup>
-import { ref, onMounted, watch, onBeforeUnmount } from 'vue'
+import { ref, watch, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { login, register } from '@/api/user'
+import { login, register, sendResetCode, resetPassword } from '@/api/user'
 
 const router = useRouter()
 const route = useRoute()
@@ -10,6 +10,8 @@ const route = useRoute()
 // 当前 Tab：login / register / forgot
 const activeTab = ref('login')
 const loading = ref(false)
+
+const VALID_TABS = ['login', 'register', 'forgot']
 
 // 忘记密码 - 发送验证码相关
 const sendingCode = ref(false)
@@ -24,8 +26,8 @@ const loginForm = ref({
 })
 
 const loginRules = {
-  username: [{ required: true, message: '请输入用户名或邮箱', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
+  username: [{ required: true, message: '请输入用户名或邮箱' }],
+  password: [{ required: true, message: '请输入密码' }]
 }
 
 // 注册表单
@@ -39,28 +41,27 @@ const registerForm = ref({
 
 const registerRules = {
   username: [
-    { required: true, message: '请输入用户名', trigger: 'blur' },
-    { min: 3, max: 50, message: '用户名长度在 3 到 50 个字符', trigger: 'blur' }
+    { required: true, message: '请输入用户名' },
+    { min: 3, max: 50, message: '用户名长度在 3 到 50 个字符' }
   ],
   email: [
-    { required: true, message: '请输入邮箱', trigger: 'blur' },
-    { type: 'email', message: '请输入正确的邮箱格式', trigger: 'blur' }
+    { required: true, message: '请输入邮箱' },
+    { type: 'email', message: '请输入正确的邮箱格式' }
   ],
   password: [
-    { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, max: 20, message: '密码长度在 6 到 20 个字符', trigger: 'blur' }
+    { required: true, message: '请输入密码' },
+    { min: 6, max: 20, message: '密码长度在 6 到 20 个字符' }
   ],
   confirmPassword: [
-    { required: true, message: '请再次输入密码', trigger: 'blur' },
+    { required: true, message: '请再次输入密码' },
     {
-      validator: (rule, value, callback) => {
+      validator: (_rule, value, callback) => {
         if (value !== registerForm.value.password) {
           callback(new Error('两次输入的密码不一致'))
         } else {
           callback()
         }
-      },
-      trigger: 'blur'
+      }
     }
   ]
 }
@@ -68,6 +69,10 @@ const registerRules = {
 // 计算登录/注册后的跳转地址：优先使用 redirect，其次跳转到新建任务页
 const getRedirectPath = () => {
   return typeof route.query.redirect === 'string' ? route.query.redirect : '/new-task'
+}
+
+const normalizeTab = (tab) => {
+  return VALID_TABS.includes(tab) ? tab : 'login'
 }
 
 // 忘记密码表单：邮箱 + 验证码 + 新密码 + 确认新密码
@@ -81,36 +86,34 @@ const forgotForm = ref({
 
 const forgotRules = {
   email: [
-    { required: true, message: '请输入邮箱', trigger: 'blur' },
-    { type: 'email', message: '请输入正确的邮箱格式', trigger: 'blur' }
+    { required: true, message: '请输入邮箱' },
+    { type: 'email', message: '请输入正确的邮箱格式' }
   ],
-  code: [{ required: true, message: '请输入验证码', trigger: 'blur' }],
+  code: [{ required: true, message: '请输入验证码' }],
   newPassword: [
-    { required: true, message: '请输入新密码', trigger: 'blur' },
-    { min: 6, max: 20, message: '密码长度在 6 到 20 个字符', trigger: 'blur' }
+    { required: true, message: '请输入新密码' },
+    { min: 6, max: 20, message: '密码长度在 6 到 20 个字符' }
   ],
   confirmNewPassword: [
-    { required: true, message: '请再次输入新密码', trigger: 'blur' },
+    { required: true, message: '请再次输入新密码' },
     {
-      validator: (rule, value, callback) => {
+      validator: (_rule, value, callback) => {
         if (value !== forgotForm.value.newPassword) {
           callback(new Error('两次输入的新密码不一致'))
         } else {
           callback()
         }
-      },
-      trigger: 'blur'
+      }
     }
   ]
 }
 
 // 登录
 const submitLogin = async () => {
-  if (!loginFormRef.value) return
+  if (!loginFormRef.value || loading.value) return
 
   try {
-    const valid = await loginFormRef.value.validate()
-    if (!valid) return
+    await loginFormRef.value.validate()
   } catch {
     return
   }
@@ -134,7 +137,7 @@ const submitLogin = async () => {
 
 // 注册
 const submitRegister = async () => {
-  if (!registerFormRef.value) return
+  if (!registerFormRef.value || loading.value) return
 
   try {
     const valid = await registerFormRef.value.validate()
@@ -181,8 +184,9 @@ const sendCode = async () => {
 
   sendingCode.value = true
   try {
-    // TODO: 对接后端发送验证码接口
-    await new Promise((resolve) => setTimeout(resolve, 1000))
+    await sendResetCode({
+      email: forgotForm.value.email
+    })
     ElMessage.success('验证码已发送到您的邮箱，请注意查收')
 
     codeCountdown.value = 60
@@ -202,9 +206,9 @@ const sendCode = async () => {
   }
 }
 
-// 忘记密码：这里只做前端校验和提示，留出后端接口位置
+// 忘记密码：先发验证码，再用验证码重置密码
 const submitForgot = async () => {
-  if (!forgotFormRef.value) return
+  if (!forgotFormRef.value || loading.value) return
 
   try {
     const valid = await forgotFormRef.value.validate()
@@ -215,8 +219,11 @@ const submitForgot = async () => {
 
   loading.value = true
   try {
-    // TODO: 对接后端重置密码接口：校验验证码 + 更新密码
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    await resetPassword({
+      email: forgotForm.value.email,
+      code: forgotForm.value.code,
+      newPassword: forgotForm.value.newPassword
+    })
     ElMessage.success('密码已重置，请使用新密码登录')
     activeTab.value = 'login'
   } catch (error) {
@@ -239,29 +246,34 @@ const handleEnter = () => {
 }
 
 // 底部“立即注册”点击
-const goRegister = () => {
-  activeTab.value = 'register'
-}
 
 // 根据路由自动选择初始 Tab（/register 或 ?tab=register）
 const syncTabWithRoute = () => {
-  const queryTab = typeof route.query.tab === 'string' ? route.query.tab : ''
-  if (route.path === '/register' || queryTab === 'register') {
-    activeTab.value = 'register'
-  } else {
-    activeTab.value = 'login'
-  }
+  const queryTab = typeof route.query.tab === 'string' ? route.query.tab : 'login'
+  activeTab.value = normalizeTab(queryTab)
 }
 
-onMounted(() => {
-  syncTabWithRoute()
-})
+const updateTabInRoute = (tab) => {
+  const nextQuery = { ...route.query, tab }
+  router.replace({ path: route.path || '/login', query: nextQuery })
+}
+
+const openRegisterTab = () => {
+  activeTab.value = 'register'
+  updateTabInRoute('register')
+}
+
+const openForgotTab = () => {
+  activeTab.value = 'forgot'
+  updateTabInRoute('forgot')
+}
 
 watch(
-  () => route.fullPath,
+  () => route.query.tab,
   () => {
     syncTabWithRoute()
-  }
+  },
+  { immediate: true }
 )
 
 onBeforeUnmount(() => {
@@ -276,28 +288,27 @@ onBeforeUnmount(() => {
   <div class="auth-container">
     <el-card class="auth-card" shadow="hover">
       <h1 class="title">欢迎使用 MindMooc</h1>
-      <!-- <p class="subtitle">使用账号登录以创建和管理你的学习任务</p> -->
 
       <!-- Tab 切换 -->
       <div class="tabs">
         <div
           class="tab-item"
           :class="{ active: activeTab === 'login' }"
-          @click="activeTab = 'login'"
+          @click="activeTab = 'login'; updateTabInRoute('login')"
         >
           登录
         </div>
         <div
           class="tab-item"
           :class="{ active: activeTab === 'register' }"
-          @click="activeTab = 'register'"
+          @click="openRegisterTab"
         >
           注册
         </div>
         <div
           class="tab-item"
           :class="{ active: activeTab === 'forgot' }"
-          @click="activeTab = 'forgot'"
+          @click="openForgotTab"
         >
           忘记密码
         </div>
@@ -315,11 +326,12 @@ onBeforeUnmount(() => {
         class="auth-form"
       >
         <el-form-item prop="username">
-          <el-input v-model="loginForm.username" placeholder="用户名或邮箱" />
+          <el-input v-model="loginForm.username" :validate-event="false" placeholder="用户名或邮箱" />
         </el-form-item>
         <el-form-item prop="password">
           <el-input
             v-model="loginForm.password"
+            :validate-event="false"
             type="password"
             show-password
             placeholder="密码"
@@ -349,14 +361,15 @@ onBeforeUnmount(() => {
         class="auth-form"
       >
         <el-form-item prop="username">
-          <el-input v-model="registerForm.username" placeholder="用户名" />
+          <el-input v-model="registerForm.username" :validate-event="false" placeholder="用户名" />
         </el-form-item>
         <el-form-item prop="email">
-          <el-input v-model="registerForm.email" placeholder="邮箱" />
+          <el-input v-model="registerForm.email" :validate-event="false" placeholder="邮箱" />
         </el-form-item>
         <el-form-item prop="password">
           <el-input
             v-model="registerForm.password"
+            :validate-event="false"
             type="password"
             show-password
             placeholder="密码（6~20个字符）"
@@ -365,6 +378,7 @@ onBeforeUnmount(() => {
         <el-form-item prop="confirmPassword">
           <el-input
             v-model="registerForm.confirmPassword"
+            :validate-event="false"
             type="password"
             show-password
             placeholder="确认密码"
@@ -394,12 +408,13 @@ onBeforeUnmount(() => {
         class="auth-form"
       >
         <el-form-item prop="email">
-          <el-input v-model="forgotForm.email" placeholder="注册邮箱" />
+          <el-input v-model="forgotForm.email" :validate-event="false" placeholder="注册邮箱" />
         </el-form-item>
         <el-form-item prop="code">
           <div class="code-row">
             <el-input
               v-model="forgotForm.code"
+              :validate-event="false"
               placeholder="验证码"
               class="code-input"
             />
@@ -417,6 +432,7 @@ onBeforeUnmount(() => {
         <el-form-item prop="newPassword">
           <el-input
             v-model="forgotForm.newPassword"
+            :validate-event="false"
             type="password"
             show-password
             placeholder="新密码（6~20个字符）"
@@ -425,6 +441,7 @@ onBeforeUnmount(() => {
         <el-form-item prop="confirmNewPassword">
           <el-input
             v-model="forgotForm.confirmNewPassword"
+            :validate-event="false"
             type="password"
             show-password
             placeholder="确认新密码"
@@ -445,7 +462,7 @@ onBeforeUnmount(() => {
       <!-- 底部提示：只在登录 Tab 下显示 -->
       <div class="footer" v-if="activeTab === 'login'">
         <span class="footer-text">还没有账号？</span>
-        <el-button type="text" class="footer-link" @click="goRegister">
+        <el-button type="text" class="footer-link" @click="openRegisterTab">
           立即注册
         </el-button>
       </div>
@@ -458,7 +475,10 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 100%;
   min-height: 100vh;
+  box-sizing: border-box;
+  padding: 16px 0;
   background:
     radial-gradient(circle at 0% 0%, rgba(45, 212, 191, 0.45), transparent 55%),
     radial-gradient(circle at 100% 0%, rgba(56, 189, 248, 0.4), transparent 55%),
@@ -478,9 +498,7 @@ onBeforeUnmount(() => {
   text-align: center;
   margin: 12px 0 20px;
   font-size: 24px;
-  background: linear-gradient(135deg, #0ea5e9, #22c55e);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: #0f172a;
 }
 
 .subtitle {
@@ -572,10 +590,15 @@ onBeforeUnmount(() => {
   gap: 4px;
   font-size: 13px;
   color: #64748b;
+  flex-wrap: wrap;
 }
 
 .footer-text {
   line-height: 1;
+}
+
+.footer-divider {
+  color: #cbd5e1;
 }
 
 .footer-link {
@@ -590,5 +613,3 @@ onBeforeUnmount(() => {
   color: #0284c7;
 }
 </style>
-
-

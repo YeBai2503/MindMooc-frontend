@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import router from '@/router'
 
 // Token 存取工具，方便后续登录页接入
 const TOKEN_KEY = 'mindmooc_token'
@@ -20,8 +21,18 @@ export function setToken(token) {
 // 开发环境直接请求网关 http://localhost:80，通过 /api 前缀转发到后端业务服务
 const http = axios.create({
   baseURL: 'http://localhost/api',
-  timeout: 15000
+  timeout: 30000
 })
+
+const redirectToLogin = () => {
+  const currentPath = router.currentRoute.value.fullPath
+  if (router.currentRoute.value.path !== '/login') {
+    router.replace({
+      path: '/login',
+      query: currentPath && currentPath !== '/login' ? { redirect: currentPath } : {}
+    })
+  }
+}
 
 // 请求拦截：附带 Authorization
 http.interceptors.request.use(
@@ -53,15 +64,29 @@ http.interceptors.response.use(
       return res.data
     }
 
+    if (code === 401 || code === 403 || code === 1006) {
+      setToken(null)
+      redirectToLogin()
+      return Promise.reject(new Error(message || '登录已过期'))
+    }
+
     // 其它 code 认为是错误
     ElMessage.error(message)
     return Promise.reject(new Error(message))
   },
   (error) => {
+    const status = error.response?.status
     const msg =
       error.response?.data?.message ||
       error.message ||
       '网络异常，请稍后重试'
+
+    if (status === 401 || status === 403) {
+      setToken(null)
+      redirectToLogin()
+      return Promise.reject(error)
+    }
+
     ElMessage.error(msg)
     return Promise.reject(error)
   }

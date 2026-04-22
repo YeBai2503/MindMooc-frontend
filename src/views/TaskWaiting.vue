@@ -2,7 +2,8 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { getTask } from '@/api/task'
+import { Loading, CircleCheck, CircleClose } from '@element-plus/icons-vue'
+import { getTaskStatus } from '@/api/task'
 
 const route = useRoute()
 const router = useRouter()
@@ -20,7 +21,11 @@ let timer = null
 const fetchStatus = async () => {
   loading.value = true
   try {
-    const task = await getTask(taskId)
+    const task = await getTaskStatus(taskId)
+    if (!task) {
+      router.push('/new-task')
+      return
+    }
     status.value = task.status
     title.value = task.title
     createdAt.value = task.createdAt
@@ -36,6 +41,7 @@ const fetchStatus = async () => {
     }
   } catch (error) {
     console.error('获取任务状态失败:', error)
+    router.push('/new-task')
   } finally {
     loading.value = false
   }
@@ -55,9 +61,9 @@ const stopPolling = () => {
   }
 }
 
-const goHistory = () => {
+const goNewTask = () => {
   stopPolling()
-  router.push('/history-task')
+  router.push('/new-task')
 }
 
 onMounted(() => {
@@ -80,20 +86,25 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="status-section" v-loading="loading">
-        <el-result
-          icon="info"
-          :title="title || `任务 ID：${taskId}`"
-          :sub-title="`当前状态：${status}`"
-        >
+        <el-result :title="title || `任务：${title}`">
+          <template #sub-title>
+            <div class="status-badge" :class="status">
+              当前状态：<span>{{ status }}</span>
+            </div>
+          </template>
+
           <template #icon>
             <el-icon class="status-icon" :class="status">
-              <Loading v-if="status === 'pending' || status === 'processing'" />
+              <!-- <Loading v-if="status === 'pending' || status === 'processing'" />
               <CircleCheck v-else-if="status === 'completed'" />
-              <CircleClose v-else />
+              <CircleClose v-else /> -->
+              <CircleClose v-if="status === 'failed'" />
+              <CircleCheck v-else-if="status === 'completed'" />
+              <Loading v-else />
             </el-icon>
           </template>
           <template #extra>
-            <el-button @click="goHistory">返回历史任务</el-button>
+            <el-button @click="goNewTask">返回新建任务</el-button>
           </template>
         </el-result>
 
@@ -111,7 +122,7 @@ onBeforeUnmount(() => {
         </el-alert>
 
         <p class="tips" v-if="status === 'pending' || status === 'processing'">
-          页面会自动刷新任务状态，你也可以在“历史任务”页面查看进度。
+          页面会自动刷新任务状态，你也可以稍后在任务详情查看进度。
         </p>
       </div>
     </el-card>
@@ -215,12 +226,39 @@ onBeforeUnmount(() => {
 }
 
 .waiting-card :deep(.el-result__title) {
-  font-weight: 600;
-  color: #2c3e50;
+  font-weight: 700;
+  color: #1f2937;
+  font-size: 26px;
+  line-height: 1.35;
 }
 
-.waiting-card :deep(.el-result__subtitle) {
-  color: #64748b;
+.waiting-card :deep(.el-result__extra) {
+  margin-top: 22px;
+}
+
+.status-badge {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: 14px auto 0;
+  padding: 14px 24px;
+  border-radius: 24px;
+  border: 1px solid rgba(59, 130, 246, 0.20);
+  background: linear-gradient(135deg, rgba(239, 246, 255, 0.98) 0%, rgba(224, 249, 255, 0.96) 100%);
+  box-shadow:
+    0 12px 28px rgba(37, 99, 235, 0.11),
+    0 1px 0 rgba(255, 255, 255, 0.9) inset;
+  color: #0f172a;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+  text-align: center;
+}
+
+.status-badge span {
+  font-size: 22px;
+  font-weight: 900;
 }
 
 .waiting-card :deep(.el-button) {

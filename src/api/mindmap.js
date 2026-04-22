@@ -37,6 +37,16 @@ export function deleteNode(nodeId) {
   return http.delete(`/mindmapNodes/nodes/${nodeId}`)
 }
 
+// 获取 chart 节点图片访问地址
+export function getNodeChartUrl(nodeId) {
+  return http.get(`/mindmapNodes/nodes/${nodeId}/chart-url`)
+}
+
+// 全量同步节点
+export function batchSyncMindmapNodes(mindmapId, data) {
+  return http.post(`/mindmapNodes/${mindmapId}/nodes/batch-sync`, data)
+}
+
 // 重新生成 Mermaid 代码
 export function regenerateMermaid(mindmapId) {
   return http.post(`/mindmaps/${mindmapId}/regenerate`)

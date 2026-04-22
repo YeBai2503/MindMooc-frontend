@@ -1,9 +1,9 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { getCurrentUser, updateMe } from '@/api/user'
-import { listMyTasks } from '@/api/task'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { getCurrentUser, updateMe, deleteMe } from '@/api/user'
+import { listMyTaskStatuses } from '@/api/task'
 import { setToken } from '@/api/http'
 
 const router = useRouter()
@@ -24,9 +24,7 @@ const userInfo = ref({
 const editMode = ref(false)
 const editForm = ref({
   username: '',
-  email: '',
-  password: '',
-  confirmPassword: ''
+  email: ''
 })
 
 // 统计数据
@@ -46,13 +44,22 @@ const feedbackAction = {
   color: '#22d3ee'
 }
 
+const formatDateTime = (value) => {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
 // 从后端拉取用户信息
 const fetchUserInfo = async () => {
   try {
     const user = await getCurrentUser()
     userInfo.value.username = user.username
     userInfo.value.email = user.email
-    userInfo.value.joinDate = user.createdAt
+    userInfo.value.joinDate = formatDateTime(user.createdAt)
   } catch (error) {
     console.error('获取用户信息失败:', error)
     ElMessage.error(error.message || '获取用户信息失败')
@@ -63,13 +70,13 @@ const fetchUserInfo = async () => {
 const fetchTaskStats = async () => {
   try {
     // 这里取前 100 条任务做简单统计，如有需要可改为后端聚合接口
-    const page = await listMyTasks({ pageNum: 1, pageSize: 100 })
+    const page = await listMyTaskStatuses({ pageNum: 1, pageSize: 100 })
     const records = Array.isArray(page?.records) ? page.records : []
 
     const total = page?.total ?? records.length
     const completed = records.filter((t) => t.status === 'completed').length
-    const processing = records.filter((t) => t.status === 'processing' || t.status === 'pending').length
     const failed = records.filter((t) => t.status === 'failed').length
+    const processing = total - completed - failed
 
     userInfo.value.totalTasks = total
     userInfo.value.completedTasks = completed
@@ -93,25 +100,16 @@ const startEdit = () => {
   editMode.value = true
   editForm.value = {
     username: userInfo.value.username,
-    email: userInfo.value.email,
-    password: '',
-    confirmPassword: ''
+    email: userInfo.value.email
   }
 }
 
 // 保存用户信息
 const saveUserInfo = async () => {
-  // 验证密码
-  if (editForm.value.password && editForm.value.password !== editForm.value.confirmPassword) {
-    ElMessage.error('两次输入的密码不一致')
-    return
-  }
-
   try {
     await updateMe({
       username: editForm.value.username,
       email: editForm.value.email
-      // 密码修改暂未对接后端，仅做前端校验
     })
 
     userInfo.value.username = editForm.value.username
@@ -135,6 +133,34 @@ const logout = () => {
   setToken(null)
   ElMessage.success('已退出登录')
   router.push('/login')
+}
+
+const deleteAccount = async () => {
+  try {
+    const { value: password } = await ElMessageBox.prompt('为了保护你的账号安全，请输入登录密码', '注销账号确认', {
+      confirmButtonText: '确认注销',
+      cancelButtonText: '我再想想',
+      inputType: 'password',
+      inputPlaceholder: '请输入登录密码',
+      closeOnClickModal: false,
+      closeOnPressEscape: false,
+      distinguishCancelAndClose: true,
+      center: true,
+      customClass: 'account-delete-box',
+      confirmButtonClass: 'account-delete-confirm-btn',
+      cancelButtonClass: 'account-delete-cancel-btn'
+    })
+
+    await deleteMe({ password })
+    setToken(null)
+    ElMessage.success('账号已注销')
+    router.push('/login')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      console.error('注销账号失败:', error)
+      ElMessage.error(error?.message || '注销账号失败')
+    }
+  }
 }
 
 // 跳转到反馈页面
@@ -176,7 +202,12 @@ onMounted(() => {
                   编辑资料
                 </el-button>
                 <el-button type="danger" plain @click="logout">
+                  <el-icon><SwitchButton /></el-icon>
                   退出登录
+                </el-button>
+                <el-button type="danger" @click="deleteAccount">
+                  <el-icon><Delete /></el-icon>
+                  注销账号
                 </el-button>
               </div>
             </div>
@@ -188,22 +219,6 @@ onMounted(() => {
                 </el-form-item>
                 <el-form-item label="邮箱">
                   <el-input v-model="editForm.email" placeholder="请输入邮箱地址" />
-                </el-form-item>
-                <el-form-item label="新密码">
-                  <el-input 
-                    v-model="editForm.password" 
-                    type="password" 
-                    placeholder="留空则不修改密码"
-                    show-password
-                  />
-                </el-form-item>
-                <el-form-item label="确认密码">
-                  <el-input 
-                    v-model="editForm.confirmPassword" 
-                    type="password" 
-                    placeholder="请再次输入新密码"
-                    show-password
-                  />
                 </el-form-item>
                 <el-form-item>
                   <el-button type="primary" @click="saveUserInfo">保存</el-button>

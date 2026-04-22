@@ -1,774 +1,921 @@
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import mermaid from 'mermaid'
-import { getTask } from '@/api/task'
-import { getMindmapByTask } from '@/api/mindmap'
+import { Check, Close, EditPen } from '@element-plus/icons-vue'
+import Plyr from 'plyr'
+import 'plyr/dist/plyr.css'
+import MindmapCanvas from '@/components/MindmapCanvas.vue'
+import { combineMindmapVideo, getTaskStatus, updateTaskTitle } from '@/api/task'
+import { getMindmapByTask, getMindmapNodes, getNodeChartUrl } from '@/api/mindmap'
+import { getVideoPlayUrl } from '@/api/video'
 
 const route = useRoute()
 const router = useRouter()
 
-// 任务详情 + 导图信息
-const taskDetail = ref({
-  id: null,
-  name: '',
-  status: '',
-  createTime: '',
-  completeTime: '',
-  videoUrl: '',
-  mermaidCode: '',
-  description: '',
-  mindmapId: null
-})
-
 const loading = ref(false)
 const videoRef = ref(null)
-const mermaidRef = ref(null)
+const playerRef = ref(null)
+const floatingVisible = ref(false)
+const floatingPosition = ref({ right: 24, bottom: 24 })
+const clipEnd = ref(0)
+const videoProgressByNodeId = ref(new Map())
+const lastClosedNodeId = ref('')
+const activeNodeId = ref('')
+const chartPreviewVisible = ref(false)
+const chartPreviewUrl = ref('')
+const chartPreviewTitle = ref('')
 
-// 思维导图缩放
-const mindmapScale = ref(1)
+const mindmap = ref({ id: '', taskId: '', title: '', createdAt: '', video: null, videoId: '', mermaidCode: '' })
+const task = ref({ id: '', title: '' })
+const flatNodes = ref([])
+const selectedNodeId = ref('')
+const titleEditing = ref(false)
+const titleDraft = ref('')
+const titleSaving = ref(false)
 
-// 可调整大小相关状态
-const videoWidth = ref(50) // 视频区域宽度百分比
-const mindmapWidth = ref(50) // 思维导图区域宽度百分比
-const containerHeight = ref(500) // 容器高度
-const isResizing = ref(false)
-const startX = ref(0)
-const startVideoWidth = ref(50)
+const taskTitle = computed(() => task.value.title || '任务详情')
 
-// 根据任务ID获取任务和导图详情
+const aiDialogVisible = ref(false)
+const aiCommand = ref('')
+
+const mergeDialogVisible = ref(false)
+const mergeNodeIds = ref([])
+const mergeSubmitting = ref(false)
+
+const videoUrl = computed(() => mindmap.value?.video?.storageUrl || '')
+
+const mergeCandidates = computed(() =>
+  flatNodes.value
+    .filter((node) => node.nodeType === 'text' && Number(node.endTime) > Number(node.startTime))
+    .sort((a, b) => Number(a.startTime) - Number(b.startTime))
+)
+
+const mergeTreeNodes = computed(() => {
+  const nodeMap = new Map()
+  const roots = []
+
+  mergeCandidates.value.forEach((node) => {
+    nodeMap.set(node.id, { ...node, children: [] })
+  })
+
+  nodeMap.forEach((node) => {
+    const parentId = String(node.parentId || '')
+    const parentNode = parentId ? nodeMap.get(parentId) : null
+    if (parentNode) {
+      parentNode.children.push(node)
+    } else {
+      roots.push(node)
+    }
+  })
+
+  const sortTree = (nodes) => {
+    nodes.sort((a, b) => Number(a.startTime) - Number(b.startTime))
+    nodes.forEach((node) => {
+      if (node.children?.length) sortTree(node.children)
+    })
+  }
+
+  sortTree(roots)
+  return roots
+})
+
+const expandedMergeNodeIds = ref([])
+
+const mergeVisibleNodes = computed(() => {
+  const result = []
+  const walk = (nodes, level = 0) => {
+    nodes.forEach((node) => {
+      result.push({ ...node, level, isExpanded: expandedMergeNodeIds.value.includes(node.id) })
+      if (node.children?.length && expandedMergeNodeIds.value.includes(node.id)) {
+        walk(node.children, level + 1)
+      }
+    })
+  }
+  walk(mergeTreeNodes.value)
+  return result
+})
+
+const resetMergeExpandedState = () => {
+  expandedMergeNodeIds.value = mergeTreeNodes.value.map((node) => node.id)
+}
+
+const toggleMergeNodeExpand = (nodeId) => {
+  const next = new Set(expandedMergeNodeIds.value)
+  if (next.has(nodeId)) next.delete(nodeId)
+  else next.add(nodeId)
+  expandedMergeNodeIds.value = [...next]
+}
+
+const selectedMergeNodes = computed(() =>
+  mergeNodeIds.value
+    .map((id) => mergeCandidates.value.find((node) => node.id === id))
+    .filter(Boolean)
+)
+
+const mergeSelectionIndexMap = computed(() => {
+  const map = new Map()
+  mergeNodeIds.value.forEach((id, index) => {
+    map.set(id, index + 1)
+  })
+  return map
+})
+
+const getMergeSelectionOrder = (nodeId) => mergeSelectionIndexMap.value.get(nodeId) || ''
+
+const truncateText = (text, maxLength = 20) => {
+  const value = String(text || '')
+  if (value.length <= maxLength) return value
+  return `${value.slice(0, maxLength)}...`
+}
+
+const normalizeNodes = (nodes = []) => {
+  const result = []
+  const walk = (items, parentId = null) => {
+    ;(items || []).forEach((node, index) => {
+      const normalized = {
+        id: String(node.id || ''),
+        mapId: String(node.mapId || mindmap.value.id || ''),
+        parentId: parentId || node.parentId || null,
+        order: Number(node.nodeOrder ?? node.order ?? index) || 0,
+        content: node.content || '',
+        nodeType: node.nodeType || 'text',
+        chartUrl: node.chartUrl || '',
+        startTime: Number(node.startTime) || 0,
+        endTime: Number(node.endTime) || 0
+      }
+      result.push(normalized)
+      if (node.children?.length) walk(node.children, normalized.id)
+    })
+  }
+  walk(nodes)
+  return result
+}
+
 const fetchTaskDetail = async () => {
   loading.value = true
-  
   try {
-    const taskId = route.params.id
+    const taskId = String(route.params.id || '')
+    if (!taskId) throw new Error('missing task id')
 
-    // 1. 获取任务详情
-    const task = await getTask(taskId)
-
-    // 2. 获取导图（根据任务ID）
-    let mindmap = null
-    try {
-      mindmap = await getMindmapByTask(taskId)
-    } catch (e) {
-      // 如果导图还未生成，不影响任务详情展示
-      console.warn('获取思维导图失败或未生成:', e)
+    const taskStatus = await getTaskStatus(taskId)
+    if (!taskStatus || taskStatus.status !== 'completed') {
+      router.replace(`/task/wait/${taskId}`)
+      return
     }
 
-    taskDetail.value = {
-      id: task.id,
-      name: task.title,
-      status: task.status,
-      createTime: task.createdAt,
-      completeTime: task.completedAt,
-      videoUrl: task.video?.storageUrl || '',
-      description: mindmap?.summary || task.requirement || '',
-      mermaidCode: mindmap?.mermaidCode || '',
-      mindmapId: mindmap?.id || null
+    const mindmapData = await getMindmapByTask(taskId)
+    task.value = { ...task.value, id: taskId, title: String(taskStatus.title || '') }
+    mindmap.value = mindmapData || { id: '', taskId, title: '', createdAt: '', video: null }
+    titleDraft.value = task.value.title || ''
+    titleEditing.value = false
+
+    if (mindmapData?.videoId) {
+      const playUrlData = await getVideoPlayUrl(mindmapData.videoId)
+      mindmap.value.video = {
+        ...(mindmapData.video || {}),
+        id: mindmapData.videoId,
+        storageUrl: playUrlData?.playUrl || mindmapData.video?.storageUrl || ''
+      }
     }
 
-    // 等待 DOM 更新后重新加载视频
-    await nextTick()
-    if (videoRef.value && taskDetail.value.videoUrl) {
-      videoRef.value.load()
-    }
-    
-    // 渲染思维导图
-    await renderMermaid()
+    const nodes = await getMindmapNodes(mindmap.value.id)
+    flatNodes.value = normalizeNodes(nodes)
+    selectedNodeId.value = flatNodes.value[0]?.id || ''
   } catch (error) {
-    console.error('获取任务详情失败:', error)
-    ElMessage.error(error.message || '获取任务详情失败')
+    console.error(error)
+    ElMessage.error('加载任务详情失败')
   } finally {
     loading.value = false
   }
 }
 
-// 渲染Mermaid图表
-const renderMermaid = async () => {
-  if (!mermaidRef.value || !taskDetail.value.mermaidCode) return
-  
-  try {
-    // 初始化mermaid
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: 'default',
-      themeVariables: {
-        primaryColor: '#22d3ee',
-        primaryTextColor: '#2c3e50',
-        primaryBorderColor: '#22d3ee',
-        lineColor: '#6b7280',
-        secondaryColor: '#ecfdf5',
-        tertiaryColor: '#f0fdfa'
-      }
-    })
-    
-    // 清空容器
-    mermaidRef.value.innerHTML = ''
-    
-    // 渲染图表
-    const { svg } = await mermaid.render('mermaid-graph', taskDetail.value.mermaidCode)
-    mermaidRef.value.innerHTML = svg
-    
-    // 根据容器大小自动适配初始缩放
-    fitMindmapToContainer()
-  } catch (error) {
-    console.error('渲染思维导图失败:', error)
-    mermaidRef.value.innerHTML = '<p style="color: #f56c6c;">思维导图渲染失败</p>'
+watch(
+  () => route.params.id,
+  () => {
+    playerRef.value?.destroy()
+    playerRef.value = null
+    floatingVisible.value = false
+    clipEnd.value = 0
+    activeNodeId.value = ''
+    lastClosedNodeId.value = ''
+    selectedNodeId.value = ''
+    mindmap.value = { id: '', taskId: '', title: '', createdAt: '', video: null, videoId: '', mermaidCode: '' }
+    task.value = { id: '', title: '' }
+    flatNodes.value = []
+    fetchTaskDetail()
+  },
+  { immediate: true }
+)
+
+const formatTime = (value) => {
+  const seconds = Number(value) || 0
+  const mins = Math.floor(seconds / 60)
+  const remain = Math.floor(seconds % 60).toString().padStart(2, '0')
+  return `${String(mins).padStart(2, '0')}:${remain}`
+}
+
+const formatCreatedAt = (value) => {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).format(date).replaceAll('/', '-')
+}
+
+const getVideoElement = () => videoRef.value?.querySelector('video') || null
+
+const syncPlyrSource = () => {
+  const player = playerRef.value
+  const video = getVideoElement()
+  if (!player || !video) return null
+  const nextSrc = videoUrl.value || ''
+  if (video.getAttribute('src') !== nextSrc) {
+    player.source = { type: 'video', sources: [{ src: nextSrc, type: 'video/mp4' }] }
+  }
+  return player
+}
+
+const closeFloatingVideo = () => {
+  const video = getVideoElement()
+  if (video) {
+    videoProgressByNodeId.value = new Map(videoProgressByNodeId.value).set(activeNodeId.value, video.currentTime || 0)
+  }
+  playerRef.value?.pause()
+  lastClosedNodeId.value = activeNodeId.value
+  clipEnd.value = 0
+  floatingVisible.value = false
+}
+
+const handleVideoEnded = () => {
+  clipEnd.value = 0
+  if (activeNodeId.value) {
+    videoProgressByNodeId.value = new Map(videoProgressByNodeId.value).set(activeNodeId.value, 0)
+  }
+  playerRef.value?.pause()
+}
+
+const handleVideoTimeUpdate = () => {
+  const video = getVideoElement()
+  if (!video || !clipEnd.value) return
+  if (video.currentTime >= clipEnd.value) {
+    playerRef.value?.pause()
+    clipEnd.value = 0
   }
 }
 
-// 根据容器和 SVG 尺寸自动计算合适的初始缩放比例
-const fitMindmapToContainer = () => {
-  const container = mermaidRef.value?.parentElement
-  const svg = mermaidRef.value?.querySelector('svg')
-  if (!container || !svg) return
+const initPlyr = () => {
+  const video = getVideoElement()
+  if (!video) return null
+  if (!playerRef.value) {
+    playerRef.value = new Plyr(video, { controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'fullscreen'], seekTime: 10, invertTime: false })
+  }
+  return syncPlyrSource()
+}
 
+const playNodeVideo = async (nodeId, start, end, shouldResumeFromLastClose) => {
+  activeNodeId.value = nodeId
+  floatingVisible.value = true
+  await nextTick()
+  const player = initPlyr()
+  const video = getVideoElement()
+  if (!player || !video) return ElMessage.warning('视频播放器未就绪')
+  const startPlayback = () => {
+    clipEnd.value = end
+    const resumeTime = videoProgressByNodeId.value.get(nodeId) || 0
+    player.currentTime = shouldResumeFromLastClose ? Math.min(Math.max(resumeTime, start), end) : start
+    const playPromise = player.play()
+    playPromise?.catch?.((error) => console.warn('视频播放被浏览器阻止', error))
+  }
+  if (video.readyState >= 1) return startPlayback()
+  const onLoadedMetadata = () => { video.removeEventListener('loadedmetadata', onLoadedMetadata); startPlayback() }
+  video.addEventListener('loadedmetadata', onLoadedMetadata, { once: true })
+  if (video.readyState < 1) video.load()
+}
+
+const openChartPreview = async (node) => {
+  if (!node?.id) return
   try {
-    const bbox = svg.getBBox()
-    if (!bbox.width || !bbox.height) {
-      mindmapScale.value = 1
-      return
+    const res = await getNodeChartUrl(node.id)
+    chartPreviewTitle.value = node.content || '图片预览'
+    chartPreviewUrl.value = res?.url || ''
+    chartPreviewVisible.value = true
+  } catch (error) {
+    console.error(error)
+    ElMessage.error('获取图片地址失败')
+  }
+}
+
+const handleCanvasSelect = async (node) => {
+  selectedNodeId.value = node.id
+  if (node.nodeType === 'chart') {
+    await openChartPreview(node)
+    return
+  }
+  if (node.nodeType !== 'text') return
+  const start = Number(node.startTime)
+  const end = Number(node.endTime)
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return ElMessage.warning('该文本节点未配置有效时间段')
+  const shouldResumeFromLastClose = lastClosedNodeId.value === node.id
+  await playNodeVideo(node.id, start, end, shouldResumeFromLastClose)
+  lastClosedNodeId.value = ''
+}
+
+const openEditor = () => { router.push(`/editor/${mindmap.value.id}`) }
+const openTitleEditor = () => {
+  titleDraft.value = task.value.title || ''
+  titleEditing.value = true
+}
+const cancelTitleEdit = () => {
+  titleDraft.value = task.value.title || ''
+  titleEditing.value = false
+}
+const submitTitleEdit = async () => {
+  const nextTitle = titleDraft.value.trim()
+  if (!nextTitle) return ElMessage.warning('标题不能为空')
+  if (nextTitle === (task.value.title || '')) {
+    titleEditing.value = false
+    return
+  }
+  titleSaving.value = true
+  try {
+    const taskId = String(route.params.id || task.value.id || mindmap.value.taskId || '')
+    await updateTaskTitle(taskId, { title: nextTitle })
+    task.value = { ...task.value, title: nextTitle }
+    mindmap.value = { ...mindmap.value, title: nextTitle }
+    titleEditing.value = false
+    ElMessage.success('标题已更新')
+    window.location.reload()
+  } catch (error) {
+    console.error(error)
+    ElMessage.error('更新标题失败')
+  } finally {
+    titleSaving.value = false
+  }
+}
+const openAiDialog = () => { aiDialogVisible.value = true; aiCommand.value = '' }
+const goAiReview = () => {
+  if (!aiCommand.value.trim()) return ElMessage.warning('请输入 AI 编辑命令')
+  const taskId = String(mindmap.value.taskId || route.params.id || '')
+  const mindmapId = String(mindmap.value.id || '')
+  const videoId = String(mindmap.value.videoId || mindmap.value.video?.id || '')
+  aiDialogVisible.value = false
+  router.push({
+    path: `/ai-compare/${mindmapId}`,
+    query: {
+      aiCommand: aiCommand.value.trim(),
+      taskId,
+      mindmapId,
+      videoId
     }
-
-    const containerWidth = container.clientWidth
-    const containerHeight = container.clientHeight
-    const scaleX = containerWidth / (bbox.width + 40) // 预留一点边距
-    const scaleY = containerHeight / (bbox.height + 40)
-    const scale = Math.min(scaleX, scaleY, 1)
-
-    mindmapScale.value = scale > 0 ? scale : 1
-  } catch (e) {
-    console.warn('计算思维导图缩放失败:', e)
-    mindmapScale.value = 1
-  }
+  })
+}
+const openMergeDialog = () => { mergeNodeIds.value = []; resetMergeExpandedState(); mergeDialogVisible.value = true }
+const downloadFile = async (url, filename = 'merged-video.mp4') => {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('download failed')
+  const blob = await response.blob()
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(objectUrl)
 }
 
-// 鼠标滚轮缩放思维导图
-const onMindmapWheel = (event) => {
-  const delta = event.deltaY > 0 ? -0.1 : 0.1
-  let next = mindmapScale.value + delta
-  next = Math.min(Math.max(next, 0.3), 2) // 限制缩放范围
-  mindmapScale.value = next
-}
-
-// 编辑思维导图
-const editMindMap = () => {
-  if (!taskDetail.value.mindmapId) {
-    ElMessage.warning('当前任务暂未生成思维导图')
-    return
-  }
-  router.push(`/editor/${taskDetail.value.mindmapId}`)
-}
-
-// 下载思维导图
-const downloadMindMap = () => {
-  const svg = mermaidRef.value.querySelector('svg')
-  if (!svg) return
-  
-  // 创建下载链接
-  const svgData = new XMLSerializer().serializeToString(svg)
-  const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' })
-  const svgUrl = URL.createObjectURL(svgBlob)
-  
-  const downloadLink = document.createElement('a')
-  downloadLink.href = svgUrl
-  downloadLink.download = `${taskDetail.value.name}-mindmap.svg`
-  document.body.appendChild(downloadLink)
-  downloadLink.click()
-  document.body.removeChild(downloadLink)
-  URL.revokeObjectURL(svgUrl)
-}
-
-// 复制Mermaid代码
-const copyMermaidCode = async () => {
+const submitMerge = async () => {
+  if (mergeNodeIds.value.length === 0) return ElMessage.warning('请至少选择一个节点')
+  mergeSubmitting.value = true
   try {
-    await navigator.clipboard.writeText(taskDetail.value.mermaidCode)
-    ElMessage.success('代码已复制到剪贴板')
+    const selectedNodes = selectedMergeNodes.value
+    const result = await combineMindmapVideo({ video_id: mindmap.value.videoId || mindmap.value.video?.id || '', mindmapNodes: selectedNodes })
+    const url = result?.url || result?.data?.url || ''
+    if (!url) throw new Error('missing download url')
+    await downloadFile(url, `${task.value.title || mindmap.value.title || 'merged-video'}.mp4`)
+    ElMessage.success('视频合并完成，已开始下载')
+    mergeDialogVisible.value = false
   } catch (error) {
-    ElMessage.error('复制失败')
+    console.error(error)
+    ElMessage.error('视频合并失败')
+  } finally {
+    mergeSubmitting.value = false
   }
 }
 
-// 返回历史任务
-const goBack = () => {
-  router.push('/history-task')
-}
-
-// 开始拖拽调整宽度
-const startResize = (e) => {
-  // 在移动端禁用拖拽功能
-  if (window.innerWidth <= 1024) {
-    return
-  }
-  
-  isResizing.value = true
-  startX.value = e.clientX || e.touches[0].clientX
-  startVideoWidth.value = videoWidth.value
-  
-  // 添加全局事件监听
-  document.addEventListener('mousemove', handleResize)
-  document.addEventListener('mouseup', stopResize)
-  document.addEventListener('touchmove', handleResize)
-  document.addEventListener('touchend', stopResize)
-  
-  // 防止选择文本
-  document.body.style.userSelect = 'none'
-  e.preventDefault()
-}
-
-// 处理拖拽调整
-const handleResize = (e) => {
-  if (!isResizing.value) return
-  
-  const currentX = e.clientX || e.touches[0].clientX
-  const deltaX = currentX - startX.value
-  const containerWidth = document.querySelector('.resizable-container').offsetWidth
-  const deltaPercent = (deltaX / containerWidth) * 100
-  
-  let newVideoWidth = startVideoWidth.value + deltaPercent
-  
-  // 限制最小和最大宽度
-  newVideoWidth = Math.max(20, Math.min(80, newVideoWidth))
-  
-  videoWidth.value = newVideoWidth
-  mindmapWidth.value = 100 - newVideoWidth
-}
-
-// 停止拖拽调整宽度
-const stopResize = () => {
-  isResizing.value = false
-  
-  // 移除全局事件监听
-  document.removeEventListener('mousemove', handleResize)
-  document.removeEventListener('mouseup', stopResize)
-  document.removeEventListener('touchmove', handleResize)
-  document.removeEventListener('touchend', stopResize)
-  
-  // 恢复文本选择
-  document.body.style.userSelect = ''
-}
-
-onMounted(() => {
-  fetchTaskDetail()
-  
-  // 初始化容器高度为屏幕高度的75%，但不超过850px
-  const initialHeight = Math.min(window.innerHeight * 0.75, 850)
-  containerHeight.value = Math.max(initialHeight, 500)
-})
+onBeforeUnmount(() => { playerRef.value?.destroy(); playerRef.value = null })
 </script>
 
 <template>
-  <div class="task-detail-container" v-loading="loading">
-    <!-- 页面头部 -->
+  <div class="task-detail-page" v-loading="loading">
     <div class="page-header">
-      <div class="header-left">
-        <el-button @click="goBack" class="back-button">
-          <el-icon><ArrowLeft /></el-icon>
-          返回
-        </el-button>
-        <div class="title-section">
-          <h2 class="page-title">{{ taskDetail.name }}</h2>
-          <div class="task-meta">
+      <div class="left-info">
+        <div class="title-block">
+          <div v-if="!titleEditing" class="title-row">
+            <h2 class="title">{{ taskTitle }}</h2>
+            <el-button class="title-edit-btn" text :icon="EditPen" @click="openTitleEditor" />
+          </div>
+          <div v-else class="title-edit-row">
+            <el-input
+              v-model="titleDraft"
+              class="title-input"
+              size="large"
+              maxlength="50"
+              show-word-limit
+              @keyup.enter="submitTitleEdit"
+              @keyup.esc="cancelTitleEdit"
+            />
+            <el-button
+              class="title-action-btn title-action-btn--cancel"
+              :icon="Close"
+              :loading="titleSaving"
+              @click="cancelTitleEdit"
+            />
+            <el-button
+              class="title-action-btn title-action-btn--confirm"
+              :icon="Check"
+              :loading="titleSaving"
+              @click="submitTitleEdit"
+            />
+          </div>
+          <div class="meta-row">
             <el-tag type="success" size="small">已完成</el-tag>
-            <span class="create-time">创建时间：{{ taskDetail.createTime }}</span>
+            <span>创建时间：{{ formatCreatedAt(mindmap.createdAt) }}</span>
           </div>
         </div>
       </div>
-      
-      <div class="header-actions">
-        <el-button type="primary" @click="editMindMap">
-          <el-icon><Edit /></el-icon>
-          编辑导图
-        </el-button>
+
+      <div class="action-row">
+        <el-button class="header-btn header-btn--soft" @click="openEditor">自定义编辑导图</el-button>
+        <el-button class="header-btn header-btn--soft" @click="openAiDialog">AI 智能编辑导图</el-button>
+        <el-button class="header-btn header-btn--solid" @click="openMergeDialog">微视频重组合成</el-button>
       </div>
     </div>
 
-    <div class="detail-content">
-      <!-- 视频和思维导图可调整大小区域 -->
-      <div class="resizable-wrapper">
-        <div class="resizable-container" :style="{ height: containerHeight + 'px' }">
-          <!-- 视频播放区域 -->
-          <div class="resizable-panel video-panel" :style="{ width: videoWidth + '%' }">
-            <el-card class="video-card" shadow="hover">
-              <template #header>
-                <div class="card-header">
-                  <div class="header-title">
-                    <el-icon><VideoPlay /></el-icon>
-                    <span>视频播放</span>
-                  </div>
-                </div>
-              </template>
-              
-              <div class="video-container">
-                <video
-                  ref="videoRef"
-                  controls
-                  class="video-player"
-                >
-                  <source :src="taskDetail.videoUrl" type="video/mp4">
-                  您的浏览器不支持视频播放。
-                </video>
-              </div>
-            </el-card>
-          </div>
-
-          <!-- 宽度拖拽分割线 -->
-          <div 
-            class="resize-handle resize-handle-width"
-            @mousedown="startResize"
-            @touchstart="startResize"
-          >
-            <div class="resize-line resize-line-vertical"></div>
-          </div>
-
-          <!-- 思维导图区域 -->
-          <div class="resizable-panel mindmap-panel" :style="{ width: mindmapWidth + '%' }">
-            <el-card class="mindmap-card" shadow="hover">
-              <template #header>
-                <div class="card-header">
-                  <div class="header-title">
-                    <el-icon><Share /></el-icon>
-                    <span>思维导图</span>
-                  </div>
-                  <div class="header-actions">
-                    <el-button size="small" @click="copyMermaidCode">
-                      <el-icon><CopyDocument /></el-icon>
-                      复制代码
-                    </el-button>
-                    <el-button size="small" @click="downloadMindMap">
-                      <el-icon><Download /></el-icon>
-                      下载SVG
-                    </el-button>
-                  </div>
-                </div>
-              </template>
-              
-              <div class="mindmap-container" @wheel.prevent="onMindmapWheel">
-                <div
-                  ref="mermaidRef"
-                  class="mermaid-graph"
-                  :style="{ transform: `scale(${mindmapScale})` }"
-                ></div>
-              </div>
-            </el-card>
-          </div>
-        </div>
+    <div v-show="floatingVisible" class="video-float" :style="floatingPosition">
+      <div class="video-float-header">
+        <div class="video-float-title">视频播放</div>
+        <el-button text @click="closeFloatingVideo">关闭</el-button>
       </div>
-
-      <!-- 视频描述区域 -->
-      <el-card v-if="taskDetail.description" class="description-card" shadow="hover">
-        <template #header>
-          <div class="card-header">
-            <div class="header-title">
-              <el-icon><InfoFilled /></el-icon>
-              <span>视频描述</span>
-            </div>
-          </div>
-        </template>
-        
-        <div class="description-content">
-          <p>{{ taskDetail.description }}</p>
-        </div>
-      </el-card>
-
-      <!-- Mermaid代码区域 -->
-      <el-card class="code-card" shadow="hover">
-        <template #header>
-          <div class="card-header">
-            <div class="header-title">
-              <el-icon><Document /></el-icon>
-              <span>Mermaid 代码</span>
-            </div>
-          </div>
-        </template>
-        
-        <div class="code-container">
-          <pre class="code-block"><code>{{ taskDetail.mermaidCode }}</code></pre>
-        </div>
-      </el-card>
+      <div ref="videoRef" class="task-video-shell">
+        <video
+          v-if="videoUrl"
+          class="task-video"
+          :src="videoUrl"
+          controls
+          @ended="handleVideoEnded"
+          @timeupdate="handleVideoTimeUpdate"
+        />
+      </div>
     </div>
+
+    <el-dialog v-model="chartPreviewVisible" :title="chartPreviewTitle" width="780px" class="chart-preview-dialog">
+      <div class="chart-preview-wrap">
+        <img :src="chartPreviewUrl" alt="chart" class="external-chart-preview">
+      </div>
+    </el-dialog>
+
+    <div class="canvas-wrap">
+      <MindmapCanvas
+        :nodes="flatNodes"
+        :selected-id="selectedNodeId"
+        @select="handleCanvasSelect"
+      />
+    </div>
+
+    <el-dialog v-model="aiDialogVisible" title="AI 智能编辑导图" width="560px">
+      <el-input
+        v-model="aiCommand"
+        type="textarea"
+        :rows="4"
+        placeholder="输入你的编辑要求，例如：交换某两个节点位置、减少节点数量"
+      />
+      <template #footer>
+        <el-button class="dialog-btn dialog-btn--ghost" @click="aiDialogVisible = false">取消</el-button>
+        <el-button class="dialog-btn dialog-btn--solid" @click="goAiReview">提交</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="mergeDialogVisible" title="微视频重组合成" width="720px" class="merge-dialog">
+      <el-checkbox-group v-model="mergeNodeIds" class="merge-list">
+        <template v-for="node in mergeVisibleNodes" :key="node.id">
+          <div class="merge-tree-row" :style="{ paddingLeft: `${node.level * 20}px` }">
+            <el-button
+              v-if="node.children?.length"
+              text
+              class="merge-tree-toggle"
+              @click="toggleMergeNodeExpand(node.id)"
+            >
+              {{ node.isExpanded ? '−' : '+' }}
+            </el-button>
+            <span v-else class="merge-tree-toggle merge-tree-toggle--placeholder">·</span>
+            <el-checkbox
+              :value="node.id"
+              class="merge-item"
+            >
+              <div class="merge-item-content">
+                <span class="merge-item-order">{{ getMergeSelectionOrder(node.id) || '' }}</span>
+                <div class="merge-item-texts">
+                  <div class="merge-item-main-line">
+                    <span class="merge-item-time">{{ formatTime(node.startTime) }} - {{ formatTime(node.endTime) }}</span>
+                    <span class="merge-item-content-text">{{ truncateText(node.content, 20) }}</span>
+                  </div>
+                </div>
+              </div>
+            </el-checkbox>
+          </div>
+        </template>
+      </el-checkbox-group>
+      <template #footer>
+        <el-button class="dialog-btn dialog-btn--ghost" @click="mergeDialogVisible = false">取消</el-button>
+        <el-button class="dialog-btn dialog-btn--solid" :loading="mergeSubmitting" @click="submitMerge">开始重组</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <style scoped>
-.task-detail-container {
-  max-width: 1200px;
-  margin: 0 auto;
-  min-height: 100vh;
+:deep(.plyr) {
+  --plyr-color-main: #ffffff;
+  --plyr-video-progress-buffered-background: rgba(255, 255, 255, 0.28);
+  --plyr-video-progress-buffered-background-hover: rgba(255, 255, 255, 0.36);
+  --plyr-video-range-fill-background: #ffffff;
+  --plyr-range-fill-background: #ffffff;
+  --plyr-range-thumb-background: #ffffff;
+  --plyr-control-icon-size: 18px;
+}
+
+:deep(.plyr__controls) {
+  color: #ffffff;
+}
+
+:deep(.plyr__control) {
+  color: #ffffff;
+}
+
+.task-detail-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 .page-header {
   display: flex;
   justify-content: space-between;
+  gap: 14px;
   align-items: flex-start;
-  margin-bottom: 20px;
-  padding-bottom: 16px;
-  border-bottom: 2px solid #e2e8f0;
 }
 
-.header-left {
+.left-info {
   display: flex;
-  align-items: flex-start;
-  gap: 16px;
+  gap: 12px;
 }
 
-.back-button {
-  margin-top: 4px;
-  border-radius: 8px;
-  font-weight: 500;
-  transition: all 0.3s ease;
-}
-
-.back-button:hover {
-  transform: translateX(-2px);
-}
-
-.title-section {
-  flex: 1;
-}
-
-.page-title {
-  font-size: 24px;
-  font-weight: 700;
-  color: #2c3e50;
-  margin: 0 0 8px 0;
-}
-
-.task-meta {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.create-time {
-  font-size: 14px;
-  color: #64748b;
-}
-
-.header-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.header-actions .el-button {
-  border-radius: 8px;
-  font-weight: 500;
-  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 100%);
-  border: none;
-  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.25);
-  transition: all 0.3s ease;
-}
-
-.header-actions .el-button:hover {
-  box-shadow: 0 4px 12px rgba(34, 211, 238, 0.35);
-  transform: translateY(-1px);
-}
-
-.detail-content {
-  display: grid;
-  gap: 24px;
-}
-
-.resizable-wrapper {
-  border-radius: 12px;
-  border: 1px solid rgba(226, 232, 240, 0.8);
-  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
-  overflow: hidden;
-  transition: all 0.3s ease;
-}
-
-.resizable-wrapper:hover {
-  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12);
-}
-
-.resizable-container {
-  display: flex;
-  gap: 0;
-  transition: height 0.1s ease;
-}
-
-.resizable-panel {
+.title-block {
   display: flex;
   flex-direction: column;
-  min-width: 20%;
-  max-width: 80%;
+  gap: 6px;
 }
 
-.resizable-panel .el-card {
-  height: 100%;
-  border: none;
-  border-radius: 0;
-  box-shadow: none;
+.title-row,
+.title-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
-.resizable-panel .el-card__body {
-  height: calc(100% - 60px);
+.title {
+  margin: 0;
+  font-size: 24px;
+  color: #0f172a;
+}
+
+.title-edit-btn {
+  width: 28px;
+  height: 28px;
   padding: 0;
+  color: #0f766e;
+  border-radius: 999px;
+  flex: 0 0 auto;
 }
 
-.resize-handle-width {
-  width: 8px;
-  background: #f0f2f5;
-  cursor: col-resize;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  transition: background-color 0.2s ease;
-  flex-shrink: 0;
+.title-edit-btn :deep(.el-icon) {
+  font-size: 16px;
 }
 
-.resize-handle-height {
-  width: 100%;
-  height: 8px;
-  background: #f0f2f5;
-  cursor: row-resize;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  transition: background-color 0.2s ease;
-  flex-shrink: 0;
+.title-edit-btn:hover {
+  background: rgba(34, 211, 238, 0.12);
 }
 
-.resize-handle-width:hover,
-.resize-handle-height:hover {
-  background: #e6f7ff;
+.title-input {
+  width: min(400px, 56vw);
 }
 
-.resize-handle-width:active,
-.resize-handle-height:active {
-  background: #bae7ff;
-}
-
-.resize-line-vertical {
-  width: 2px;
-  height: 40px;
-  background: #d9d9d9;
-  border-radius: 1px;
-  transition: background-color 0.2s ease;
-}
-
-.resize-line-horizontal {
-  width: 40px;
-  height: 2px;
-  background: #d9d9d9;
-  border-radius: 1px;
-  transition: background-color 0.2s ease;
-}
-
-.resize-handle-width:hover .resize-line-vertical,
-.resize-handle-height:hover .resize-line-horizontal {
-  background: #22d3ee;
-}
-
-.video-panel .el-card {
-  border-right: 1px solid #f0f0f0;
-}
-
-.mindmap-panel .el-card {
-  border-left: 1px solid #f0f0f0;
-}
-
-.layout-actions {
-  display: flex;
-  gap: 4px;
-  margin-right: 8px;
-}
-
-.export-actions {
-  display: flex;
-  gap: 4px;
-}
-
-.video-card,
-.mindmap-card,
-.description-card,
-.code-card {
+.title-action-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
   border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
 }
 
-.video-card :deep(.el-card__header),
-.mindmap-card :deep(.el-card__header),
-.description-card :deep(.el-card__header),
-.code-card :deep(.el-card__header) {
-  background: linear-gradient(135deg, rgba(74, 222, 128, 0.05) 0%, rgba(34, 211, 238, 0.05) 100%);
-  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
-  padding: 14px 20px;
+.title-action-btn:hover,
+.title-action-btn:focus-visible {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  opacity: 0.82;
 }
 
-.description-card,
-.code-card {
-  border-radius: 12px;
-  border: 1px solid rgba(226, 232, 240, 0.8);
-  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
-  transition: all 0.3s ease;
+.title-action-btn--cancel {
+  color: #ef4444;
 }
 
-.description-card:hover,
-.code-card:hover {
-  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12);
-  transform: translateY(-1px);
+.title-action-btn--confirm {
+  color: #22c55e;
 }
 
-.card-header {
+.title-action-btn :deep(.el-icon) {
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.title-action-btn :deep(svg) {
+  stroke-width: 2.8;
+}
+
+.meta-row {
+  margin-top: 6px;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: #64748b;
+  flex-wrap: wrap;
+}
+
+.action-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.dialog-btn {
+  border-radius: 10px;
   font-weight: 600;
-  font-size: 15px;
-  color: #2c3e50;
+  transition: all 0.25s ease;
 }
 
-.header-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.dialog-btn--ghost {
+  color: #0f766e;
+  background: rgba(34, 211, 238, 0.08);
+  border: 1px solid rgba(34, 211, 238, 0.22);
 }
 
-.header-title .el-icon {
-  font-size: 18px;
-  color: #22d3ee;
+.dialog-btn--ghost:hover {
+  color: #0f766e;
+  background: rgba(34, 211, 238, 0.14);
+  border-color: rgba(34, 211, 238, 0.34);
 }
 
-.header-actions .el-button {
-  border-radius: 6px;
-  font-weight: 500;
-  transition: all 0.2s ease;
+.dialog-btn--solid {
+  color: #ffffff;
+  border: 1px solid transparent;
+  background: linear-gradient(135deg, #4ade80, #22d3ee);
+  box-shadow: 0 6px 18px rgba(34, 211, 238, 0.22);
 }
 
-.header-actions .el-button:hover {
-  transform: translateY(-1px);
+.dialog-btn--solid:hover {
+  color: #ffffff;
+  background: linear-gradient(135deg, #22d3ee, #4ade80);
+  box-shadow: 0 8px 22px rgba(34, 211, 238, 0.3);
 }
 
-.video-container {
-  height: 100%;
-  background: #000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.header-btn {
+  border-radius: 10px;
+  font-weight: 600;
+  transition: all 0.25s ease;
+}
+
+.header-btn--soft {
+  color: #0f766e;
+  background: rgba(34, 211, 238, 0.08);
+  border: 1px solid rgba(34, 211, 238, 0.22);
+}
+
+.header-btn--soft:hover {
+  color: #0f766e;
+  background: rgba(34, 211, 238, 0.14);
+  border-color: rgba(34, 211, 238, 0.34);
+}
+
+.header-btn--solid {
+  color: #ffffff;
+  border: 1px solid transparent;
+  background: linear-gradient(135deg, #4ade80, #22d3ee);
+  box-shadow: 0 6px 18px rgba(34, 211, 238, 0.22);
+}
+
+.header-btn--solid:hover {
+  color: #ffffff;
+  background: linear-gradient(135deg, #22d3ee, #4ade80);
+  box-shadow: 0 8px 22px rgba(34, 211, 238, 0.3);
+}
+
+.video-float {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: min(560px, calc(100vw - 48px));
+  z-index: 2000;
+  border-radius: 14px;
   overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.18);
 }
 
-.video-player {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.mindmap-container {
-  height: 100%;
-  padding: 20px;
-  background: linear-gradient(135deg, #fafbfc 0%, #f8fafc 100%);
+.video-float-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.video-float-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.task-video-shell {
+  width: 100%;
+  background: #000;
+}
+
+.task-video {
+  display: block;
+  width: 100%;
+  background: #000;
+}
+
+.chart-preview-dialog :deep(.el-dialog__body) {
+  padding-top: 8px;
+}
+
+.chart-preview-wrap {
+  display: flex;
   justify-content: center;
+  align-items: center;
+  max-height: 70vh;
   overflow: auto;
 }
 
-.description-content {
-  padding: 8px 0;
-}
-
-.description-content p {
-  margin: 0;
-  color: #475569;
-  line-height: 1.8;
-  font-size: 15px;
-}
-
-.mermaid-graph {
-  width: 100%;
-  overflow-x: auto;
-  transform-origin: top center;
-}
-
-.mermaid-graph :deep(svg) {
+.external-chart-preview {
+  display: block;
   max-width: 100%;
+  max-height: 70vh;
+  width: auto;
   height: auto;
+  object-fit: contain;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
 }
 
-.code-container {
-  background: #f8fafc;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid #e2e8f0;
+.canvas-wrap {
+  height: calc(100vh - 150px);
+  min-height: 420px;
+  max-height: 680px;
 }
 
-.code-block {
+.merge-dialog-tip {
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.merge-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 400px;
+  overflow: auto;
+}
+
+.merge-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.merge-tree-toggle {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 999px;
+  color: #0f766e;
+}
+
+.merge-tree-toggle--placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+}
+
+.merge-item {
   margin: 0;
-  padding: 20px;
-  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-  color: #e2e8f0;
-  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-  font-size: 14px;
-  line-height: 1.6;
-  overflow-x: auto;
-  white-space: pre-wrap;
-  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 14px 16px;
+  width: 100%;
+  min-height: 40px;
+  box-sizing: border-box;
 }
 
-@media (max-width: 1024px) {
-  .resizable-container {
-    flex-direction: column;
-    height: auto !important;
-  }
-  
-  .resizable-panel {
-    min-width: 100%;
-    max-width: 100%;
-    height: 400px;
-  }
-  
-  .resize-handle-width,
-  .resize-handle-height {
-    display: none;
-  }
-  
-  .video-panel .el-card {
-    border-right: none;
-    border-bottom: 1px solid #f0f0f0;
-  }
-  
-  .mindmap-panel .el-card {
-    border-left: none;
-    border-top: 1px solid #f0f0f0;
-  }
+.merge-item :deep(.el-checkbox__input) {
+  margin-right: 12px;
+  flex: 0 0 auto;
+  align-self: center;
+  transform: scale(1.1);
+  transform-origin: center;
 }
 
-@media (max-width: 768px) {
-  .page-header {
-    flex-direction: column;
-    gap: 16px;
-  }
-  
-  .header-left {
-    width: 100%;
-  }
-  
-  .header-actions {
-    width: 100%;
-    justify-content: flex-end;
-  }
-  
-  .card-header {
-    flex-direction: column;
-    gap: 12px;
-    align-items: flex-start;
-  }
-  
-  .header-actions {
-    align-self: stretch;
-  }
-  
-  .resizable-panel {
-    height: 300px;
-  }
-  
-  .mindmap-container {
-    padding: 15px;
-  }
+.merge-item :deep(.el-checkbox__label) {
+  width: 100%;
+  font-size: 16px;
+}
+
+.merge-item-content {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  width: 100%;
+}
+
+.merge-item-order {
+  flex: 0 0 auto;
+  width: 25px;
+  height: 25px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #4ade80, #22d3ee);
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.merge-item-texts {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex: 1;
+}
+
+.merge-item-main-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  width: 100%;
+}
+
+.merge-item-time {
+  flex: 0 0 auto;
+  font-size: 16px;
+  color: #0f766e;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.merge-item-content-text {
+  min-width: 0;
+  flex: 1;
+  font-size: 16px;
+  color: #1e293b;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

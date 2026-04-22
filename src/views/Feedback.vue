@@ -12,7 +12,6 @@ const feedbackForm = ref({
   title: '',
   content: '',
   contact: '',
-  attachments: []
 })
 
 // 反馈类型选项
@@ -47,16 +46,6 @@ const getCurrentType = () => {
   return feedbackTypes.find(type => type.value === feedbackForm.value.type) || feedbackTypes[0]
 }
 
-// 文件上传处理
-const handleFileChange = (file, fileList) => {
-  feedbackForm.value.attachments = fileList
-  return false // 阻止自动上传
-}
-
-// 移除文件
-const handleFileRemove = (file, fileList) => {
-  feedbackForm.value.attachments = fileList
-}
 
 // 提交反馈
 const submitFeedback = async () => {
@@ -105,8 +94,7 @@ const resetForm = () => {
     type: 'suggestion',
     title: '',
     content: '',
-    contact: '',
-    attachments: []
+    contact: ''
   }
 }
 
@@ -193,7 +181,7 @@ const goBack = () => {
             <el-input
               v-model="feedbackForm.content"
               type="textarea"
-              :rows="8"
+              :rows="5"
               placeholder="请详细描述您遇到的问题或建议..."
               maxlength="1000"
               show-word-limit
@@ -210,29 +198,6 @@ const goBack = () => {
                 <el-icon><Message /></el-icon>
               </template>
             </el-input>
-            <div class="form-tip">
-              填写邮箱后，我们会及时回复处理结果
-            </div>
-          </el-form-item>
-
-          <el-form-item label="附件上传">
-            <el-upload
-              :file-list="feedbackForm.attachments"
-              :before-upload="() => false"
-              :on-change="handleFileChange"
-              :on-remove="handleFileRemove"
-              multiple
-              drag
-              accept="image/*,.pdf,.doc,.docx,.txt"
-            >
-              <div class="upload-content">
-                <el-icon class="upload-icon"><UploadFilled /></el-icon>
-                <div class="upload-text">
-                  <p>将文件拖拽到此处，或<em>点击上传</em></p>
-                  <p class="upload-tip">支持图片、PDF、Word、文本文件，单个文件不超过 10MB</p>
-                </div>
-              </div>
-            </el-upload>
           </el-form-item>
 
           <el-form-item>
@@ -448,12 +413,6 @@ const goBack = () => {
 .form-card :deep(.el-input__wrapper:hover),
 .form-card :deep(.el-textarea__inner:hover) {
   box-shadow: 0 2px 8px rgba(34, 211, 238, 0.15);
-}
-
-.form-tip {
-  font-size: 12px;
-  color: #909399;
-  margin-top: 4px;
 }
 
 .form-card :deep(.el-upload-dragger) {

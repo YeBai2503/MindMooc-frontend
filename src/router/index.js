@@ -4,14 +4,13 @@ import { getToken } from '@/api/http'
 // 页面组件
 import Home from '@/views/Home.vue'
 import NewTask from '@/views/NewTask.vue'
-import BatchTask from '@/views/BatchTask.vue'
-import HistoryTask from '@/views/HistoryTask.vue'
 import Profile from '@/views/Profile.vue'
 import Login from '@/views/Login.vue'
 
 // 二级页面组件
 import TaskDetail from '@/views/TaskDetail.vue'
 import MapEditor from '@/views/MapEditor.vue'
+import AiCompare from '@/views/AiCompare.vue'
 import Feedback from '@/views/Feedback.vue'
 import TaskWaiting from '@/views/TaskWaiting.vue'
 
@@ -28,18 +27,6 @@ const routes = [
     name: 'NewTask',
     component: NewTask,
     meta: { title: '新建任务' }
-  },
-  {
-    path: '/batch-task',
-    name: 'BatchTask',
-    component: BatchTask,
-    meta: { title: '批量任务' }
-  },
-  {
-    path: '/history-task',
-    name: 'HistoryTask',
-    component: HistoryTask,
-    meta: { title: '历史任务' }
   },
   {
     path: '/profile',
@@ -67,6 +54,12 @@ const routes = [
     meta: { title: '导图编辑' }
   },
   {
+    path: '/ai-compare/:id',
+    name: 'AiCompare',
+    component: AiCompare,
+    meta: { title: 'AI对比审核' }
+  },
+  {
     path: '/feedback',
     name: 'Feedback',
     component: Feedback,
@@ -89,7 +82,7 @@ const router = createRouter({
 const whiteList = ['/', '/login']
 
 // 路由守卫 - 简单的登录校验 + 设置页面标题
-router.beforeEach((to, from, next) => {
+router.beforeEach((to, _from, next) => {
   // 设置标题
   if (to.meta.title) {
     document.title = `${to.meta.title} - MindMooc`

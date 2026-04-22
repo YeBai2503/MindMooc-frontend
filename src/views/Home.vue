@@ -6,12 +6,6 @@ const router = useRouter()
 // 功能特色
 const features = [
   {
-    icon: 'VideoPlay',
-    title: '智能视频解析',
-    description: '上传慕课视频，AI自动提取关键知识点和结构信息',
-    color: '#22d3ee'
-  },
-  {
     icon: 'Share',
     title: '思维导图生成',
     description: '基于视频内容自动生成结构化的思维导图',
@@ -19,14 +13,20 @@ const features = [
   },
   {
     icon: 'Edit',
-    title: '可视化编辑',
-    description: '支持在线编辑和自定义思维导图样式',
+    title: '自定义编辑',
+    description: '支持自定义对思维导图节点进行增加、删除、修改',
     color: '#fbbf24'
   },
   {
-    icon: 'Files',
-    title: '批量处理',
-    description: '支持批量上传多个视频文件，提高学习效率',
+    icon: 'Cpu',
+    title: 'AI智能编辑',
+    description: '输入要求，AI自动编辑并提供前后对比',
+    color: '#22d3ee'
+  },
+  {
+    icon: 'Scissor',
+    title: '微课重组合成',
+    description: '选择需要组合的导图节点，自动剪辑成微课',
     color: '#f87171'
   }
 ]
@@ -71,6 +71,15 @@ const learnMore = () => {
 
 <template>
   <div class="home-container">
+    <header class="page-nav">
+      <div class="nav-inner">
+        <div class="brand" @click="router.push('/')">
+          <!-- <img src="/logo.svg" alt="MindMooc" class="brand-logo" /> -->
+          <span class="brand-name">MindMooc</span>
+        </div>
+      </div>
+    </header>
+
     <!-- 英雄区域 -->
     <section class="hero-section">
       <div class="hero-content">
@@ -82,7 +91,7 @@ const learnMore = () => {
             MindMooc 是一款基于AI的慕课视频思维导图生成工具
           </p>
           <p class="hero-description">
-            上传您的学习视频，我们将自动分析内容并生成结构化的思维导图，
+            上传您学习的视频，我们将自动分析内容并生成结构化的思维导图，
             帮助您更好地理解和记忆知识点，提升学习效率。
           </p>
           
@@ -189,7 +198,7 @@ const learnMore = () => {
             <div class="step-number">1</div>
             <div class="step-content">
               <h3 class="step-title">上传视频</h3>
-              <p class="step-description">选择您的慕课视频文件，支持多种格式</p>
+              <p class="step-description">上传您的慕课视频文件</p>
             </div>
           </div>
           
@@ -200,8 +209,8 @@ const learnMore = () => {
           <div class="step-item">
             <div class="step-number">2</div>
             <div class="step-content">
-              <h3 class="step-title">AI分析</h3>
-              <p class="step-description">系统自动分析视频内容，提取知识结构</p>
+              <h3 class="step-title">视频分析</h3>
+              <p class="step-description">深度分析视频内容</p>
             </div>
           </div>
           
@@ -213,7 +222,7 @@ const learnMore = () => {
             <div class="step-number">3</div>
             <div class="step-content">
               <h3 class="step-title">获得导图</h3>
-              <p class="step-description">生成可编辑的思维导图，支持导出分享</p>
+              <p class="step-description">生成可编辑的思维导图</p>
             </div>
           </div>
         </div>
@@ -243,8 +252,51 @@ const learnMore = () => {
 
 <style scoped>
 .home-container {
+  width: 100%;
   min-height: 100vh;
+  flex: 1;
+  box-sizing: border-box;
 }
+
+.page-nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: linear-gradient(135deg, #4ade80 0%, #22d3ee 50%, #06b6d4 100%);
+  box-shadow: 0 8px 24px rgba(34, 211, 238, 0.18);
+}
+
+.nav-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  margin-left: 5px; 
+}
+
+.brand-logo {
+  width: 50px;
+  height: 50px;
+}
+
+.brand-name {
+  font-family: 'Audiowide', sans-serif;
+  font-size: 36px;
+  font-weight: 400;
+  color: #ffffff;
+  letter-spacing: 1px;
+}
+
 
 /* 英雄区域 */
 .hero-section {
@@ -414,6 +466,10 @@ const learnMore = () => {
   padding: 80px 0;
 }
 
+.features-section {
+  background: #ffffff;
+}
+
 .use-cases-section {
   background: #f8fafc;
 }
@@ -445,8 +501,8 @@ const learnMore = () => {
 /* 功能特色 */
 .features-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 40px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 24px;
 }
 
 .feature-card {
@@ -618,6 +674,12 @@ const learnMore = () => {
 }
 
 /* 响应式设计 */
+@media (max-width: 1024px) {
+  .features-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 768px) {
   .hero-content {
     grid-template-columns: 1fr;
@@ -631,6 +693,10 @@ const learnMore = () => {
   
   .hero-actions {
     justify-content: center;
+  }
+  
+  .features-grid {
+    grid-template-columns: 1fr;
   }
   
   .workflow-steps {
