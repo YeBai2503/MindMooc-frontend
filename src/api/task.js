@@ -70,9 +70,12 @@ export function combineMindmapVideo(data) {
       }))
     : []
 
-  return http.post('/agent/mindmap/video-combine', {
-    video_id: String(data?.video_id || ''),
-    mindmapNodes
+  return http.post(
+    '/agent/mindmap/video-combine',
+    {
+      video_id: String(data?.video_id || ''),
+      mindmapNodes,
+      need_watermark: !!data?.need_watermark
     },
     {
       timeout: 120000

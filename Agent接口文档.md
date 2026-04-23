@@ -119,6 +119,7 @@ curl -X POST http://localhost:10020/api/agent/mindmap/manual-review \
 - 请求体：`VideoCombineRequest`
 	- `video_id` (string)
 	- `mindmapNodes` (array of `MindmapNode`) —— 主要使用每项的 `start_time`/`end_time`
+	- `need_watermark`(bool) 是否需要进度条水印
  - 请求体示例：
 
 ```json
@@ -147,7 +148,8 @@ curl -X POST http://localhost:10020/api/agent/mindmap/manual-review \
 			"start_time": 35.0,
 			"end_time": 45.0
 		}
-	]
+	],
+	"need_watermark": false
 }
 ```
 

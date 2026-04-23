@@ -41,6 +41,7 @@ const aiCommand = ref('')
 
 const mergeDialogVisible = ref(false)
 const mergeNodeIds = ref([])
+const mergeNeedWatermark = ref(true)
 const mergeSubmitting = ref(false)
 
 const videoUrl = computed(() => mindmap.value?.video?.storageUrl || '')
@@ -377,7 +378,7 @@ const goAiReview = () => {
     }
   })
 }
-const openMergeDialog = () => { mergeNodeIds.value = []; resetMergeExpandedState(); mergeDialogVisible.value = true }
+const openMergeDialog = () => { mergeNodeIds.value = []; mergeNeedWatermark.value = true; resetMergeExpandedState(); mergeDialogVisible.value = true }
 const downloadFile = async (url, filename = 'merged-video.mp4') => {
   const response = await fetch(url)
   if (!response.ok) throw new Error('download failed')
@@ -397,7 +398,11 @@ const submitMerge = async () => {
   mergeSubmitting.value = true
   try {
     const selectedNodes = selectedMergeNodes.value
-    const result = await combineMindmapVideo({ video_id: mindmap.value.videoId || mindmap.value.video?.id || '', mindmapNodes: selectedNodes })
+    const result = await combineMindmapVideo({
+      video_id: mindmap.value.videoId || mindmap.value.video?.id || '',
+      mindmapNodes: selectedNodes,
+      need_watermark: mergeNeedWatermark.value
+    })
     const url = result?.url || result?.data?.url || ''
     if (!url) throw new Error('missing download url')
     await downloadFile(url, `${task.value.title || mindmap.value.title || 'merged-video'}.mp4`)
@@ -535,8 +540,15 @@ onBeforeUnmount(() => { playerRef.value?.destroy(); playerRef.value = null })
         </template>
       </el-checkbox-group>
       <template #footer>
-        <el-button class="dialog-btn dialog-btn--ghost" @click="mergeDialogVisible = false">取消</el-button>
-        <el-button class="dialog-btn dialog-btn--solid" :loading="mergeSubmitting" @click="submitMerge">开始重组</el-button>
+        <div class="merge-dialog-footer">
+          <el-checkbox v-model="mergeNeedWatermark" class="merge-watermark-checkbox">
+            需要进度条水印
+          </el-checkbox>
+          <div class="merge-dialog-footer-actions">
+            <el-button class="dialog-btn dialog-btn--ghost" @click="mergeDialogVisible = false">取消</el-button>
+            <el-button class="dialog-btn dialog-btn--solid" :loading="mergeSubmitting" @click="submitMerge">开始重组</el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
   </div>
@@ -807,6 +819,67 @@ onBeforeUnmount(() => { playerRef.value?.destroy(); playerRef.value = null })
   margin-bottom: 12px;
   font-size: 13px;
   color: #64748b;
+}
+
+.merge-watermark-checkbox {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.merge-watermark-checkbox :deep(.el-checkbox) {
+  display: inline-flex;
+  align-items: center;
+}
+
+.merge-watermark-checkbox :deep(.el-checkbox__input) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 6px;
+  transform: translateY(1px) scale(1.08);
+  transform-origin: center;
+}
+
+.merge-watermark-checkbox :deep(.el-checkbox__label) {
+  font-size: 15px;
+  line-height: 1;
+  padding-top: 0;
+}
+
+.merge-watermark-checkbox :deep(.el-checkbox__input.is-checked .el-checkbox__inner),
+.merge-watermark-checkbox :deep(.el-checkbox__input.is-indeterminate .el-checkbox__inner) {
+  background: linear-gradient(135deg, #4ade80, #22d3ee) !important;
+  border-color: transparent !important;
+}
+
+.merge-watermark-checkbox :deep(.el-checkbox__input.is-checked .el-checkbox__inner::after) {
+  border-color: #ffffff !important;
+}
+
+.merge-watermark-checkbox :deep(.el-checkbox__input.is-checked + .el-checkbox__label) {
+  color: #0f766e !important;
+}
+
+.merge-watermark-checkbox :deep(.el-checkbox__input.is-focus .el-checkbox__inner),
+.merge-watermark-checkbox :deep(.el-checkbox__inner:hover) {
+  border-color: #22d3ee;
+}
+
+.merge-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+}
+
+.merge-dialog-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .merge-list {
