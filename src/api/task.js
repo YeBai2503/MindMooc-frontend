@@ -36,6 +36,10 @@ export function updateTaskTitle(taskId, data) {
   return http.put(`/tasks/${taskId}/title`, data)
 }
 
+export function searchMyTasks(params) {
+  return http.get('/tasks/my/search', { params })
+}
+
 export function startMindmapEdit(data) {
   return http.post(
     '/agent/mindmap/edit',

@@ -1,8 +1,9 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { deleteTask, listMyTaskStatuses } from '@/api/task'
+import { Search } from '@element-plus/icons-vue'
+import { deleteTask, listMyTaskStatuses, searchMyTasks } from '@/api/task'
 import { getToken } from '@/api/http'
 
 const router = useRouter()
@@ -20,6 +21,16 @@ const hasMoreTasks = ref(false)
 const taskList = ref([])
 const taskListLoading = ref(false)
 const taskListError = ref('')
+
+// 搜索相关状态
+const searchDialogVisible = ref(false)
+const searchKeyword = ref('')
+const searchResults = ref([])
+const searchLoading = ref(false)
+const searchPage = ref(1)
+const searchHasMore = ref(false)
+const searchInputRef = ref(null)
+const hasSearched = ref(false)
 
 // 是否为登录 / 注册页
 const isAuthPage = computed(() => {
@@ -148,6 +159,84 @@ const goHome = () => {
   router.push('/')
 }
 
+// 搜索相关方法
+const openSearchDialog = () => {
+  searchDialogVisible.value = true
+  searchKeyword.value = ''
+  searchResults.value = []
+  searchPage.value = 1
+  searchHasMore.value = false
+  hasSearched.value = false
+}
+
+const focusSearchInput = () => {
+  nextTick(() => {
+    searchInputRef.value?.focus()
+  })
+}
+
+const handleSearch = async () => {
+  if (!searchKeyword.value.trim()) {
+    searchResults.value = []
+    hasSearched.value = false
+    return
+  }
+
+  searchLoading.value = true
+  searchPage.value = 1
+  hasSearched.value = true
+  try {
+    const page = await searchMyTasks({
+      keyword: searchKeyword.value.trim(),
+      pageNum: searchPage.value,
+      pageSize: 10
+    })
+    const records = Array.isArray(page?.records) ? page.records : []
+    searchResults.value = records.map(normalizeTaskStatus)
+    const total = Number(page?.total ?? searchResults.value.length)
+    searchHasMore.value = searchPage.value * 10 < total
+  } catch (error) {
+    console.error('搜索任务失败:', error)
+    searchResults.value = []
+  } finally {
+    searchLoading.value = false
+  }
+}
+
+const loadMoreSearchResults = async () => {
+  if (!searchHasMore.value || searchLoading.value) return
+
+  searchLoading.value = true
+  searchPage.value += 1
+  try {
+    const page = await searchMyTasks({
+      keyword: searchKeyword.value.trim(),
+      pageNum: searchPage.value,
+      pageSize: 10
+    })
+    const records = Array.isArray(page?.records) ? page.records : []
+    const normalized = records.map(normalizeTaskStatus)
+    searchResults.value = [...searchResults.value, ...normalized]
+    const total = Number(page?.total ?? searchResults.value.length)
+    searchHasMore.value = searchPage.value * 10 < total
+  } catch (error) {
+    console.error('加载更多搜索结果失败:', error)
+  } finally {
+    searchLoading.value = false
+  }
+}
+
+const clearSearch = () => {
+  searchResults.value = []
+  searchHasMore.value = false
+  hasSearched.value = false
+}
+
+const openSearchResult = (task) => {
+  router.push(`/task/${task.id}`)
+  searchDialogVisible.value = false
+}
+
 const getTaskStatusText = (status) => {
   const statusMap = {
     pending: '排队中',
@@ -194,11 +283,16 @@ onMounted(() => {
               <img src="/logo.svg" alt="MindMooc" class="app-logo" />
               <h1 class="app-title">MindMooc</h1>
             </div>
-            <button class="collapse-btn" @click="toggleSidebar">
-              <el-icon>
-                <component :is="sidebarCollapsed ? 'Expand' : 'Fold'" />
-              </el-icon>
-            </button>
+            <div class="logo-actions">
+              <button class="action-btn search-btn" @click="openSearchDialog">
+                <el-icon><Search /></el-icon>
+              </button>
+              <button class="action-btn collapse-btn" @click="toggleSidebar">
+                <el-icon>
+                  <component :is="sidebarCollapsed ? 'Expand' : 'Fold'" />
+                </el-icon>
+              </button>
+            </div>
           </div>
           <button v-show="sidebarCollapsed" class="collapse-btn collapse-alone" @click="toggleSidebar">
             <el-icon>
@@ -290,6 +384,75 @@ onMounted(() => {
     <template v-else>
       <router-view />
     </template>
+
+    <!-- 搜索弹窗 -->
+    <el-dialog
+      v-model="searchDialogVisible"
+      title="搜索任务"
+      width="460px"
+      :show-close="true"
+      :close-on-click-modal="true"
+      class="search-dialog"
+      @opened="focusSearchInput"
+    >
+      <div class="search-dialog-content">
+        <div class="search-input-wrapper">
+          <el-input
+            ref="searchInputRef"
+            v-model="searchKeyword"
+            placeholder="输入任务标题关键词..."
+            :prefix-icon="Search"
+            clearable
+            @keyup.enter="handleSearch"
+            @clear="clearSearch"
+          >
+            <template #append>
+              <el-button :loading="searchLoading" @click="handleSearch">
+                搜索
+              </el-button>
+            </template>
+          </el-input>
+        </div>
+
+        <div class="search-results" v-if="searchResults.length > 0 || searchLoading">
+          <div v-if="searchLoading && !searchResults.length" class="search-loading">
+            搜索中...
+          </div>
+          <template v-else>
+            <ul class="search-result-list">
+              <li
+                v-for="task in searchResults"
+                :key="task.id"
+                class="search-result-item"
+                @click="openSearchResult(task)"
+              >
+                <div class="result-content">
+                  <div class="result-main">{{ task.title }}</div>
+                  <div class="result-meta">
+                    <span class="result-status">{{ getTaskStatusText(task.status) }}</span>
+                    <span class="result-date">{{ formatTaskDate(task.createdAt || task.completedAt || task.startedAt) }}</span>
+                  </div>
+                </div>
+                <el-icon class="result-arrow"><ArrowRight /></el-icon>
+              </li>
+            </ul>
+            <el-button
+              v-if="searchHasMore"
+              class="load-more-btn"
+              text
+              :loading="searchLoading"
+              @click="loadMoreSearchResults"
+            >
+              加载更多
+            </el-button>
+          </template>
+        </div>
+
+        <div v-else-if="hasSearched && searchKeyword && !searchLoading" class="search-empty">
+          未找到相关任务
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -342,10 +505,39 @@ onMounted(() => {
   gap: 8px;
 }
 
+.logo-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.action-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid rgba(52, 211, 153, 0.24);
+  background: rgba(250, 255, 252, 0.96);
+  color: #166534;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.action-btn:hover {
+  background: rgba(242, 255, 248, 0.98);
+  border-color: rgba(45, 212, 191, 0.34);
+}
+
+.search-btn:hover {
+  background: rgba(167, 243, 208, 0.3);
+}
+
 .collapse-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
   border: 1px solid rgba(52, 211, 153, 0.24);
   background: rgba(250, 255, 252, 0.96);
   color: #166534;
@@ -596,5 +788,165 @@ onMounted(() => {
     height: calc(100vh - 20px);
     padding: 14px;
   }
+}
+
+/* 搜索弹窗样式 */
+.search-dialog :deep(.el-dialog) {
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.search-dialog :deep(.el-dialog__header) {
+  padding: 20px 24px 16px;
+  margin: 0;
+  border-bottom: 1px solid rgba(16, 185, 129, 0.12);
+}
+
+.search-dialog :deep(.el-dialog__title) {
+  font-size: 18px;
+  font-weight: 600;
+  color: #0f5132;
+}
+
+.search-dialog :deep(.el-dialog__body) {
+  padding: 0;
+}
+
+.search-dialog-content {
+  padding: 20px 24px 24px;
+}
+
+.search-input-wrapper {
+  margin-bottom: 16px;
+}
+
+.search-input-wrapper :deep(.el-input__wrapper) {
+  border-radius: 10px 0 0 10px;
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.2);
+}
+
+.search-input-wrapper :deep(.el-input__wrapper:focus-within) {
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.3);
+}
+
+.search-input-wrapper :deep(.el-input-group__append) {
+  background: linear-gradient(135deg, #4ade80 0%, #34d399 100%);
+  border: none;
+  border-radius: 0 10px 10px 0;
+  color: white;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.search-input-wrapper :deep(.el-input-group__append .el-button) {
+  margin: 0;
+  height: 100%;
+  min-height: 32px;
+  border-radius: 0 10px 10px 0;
+}
+
+.search-input-wrapper :deep(.el-input-group__append:hover) {
+  filter: brightness(1.05);
+}
+
+.search-results {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.search-loading {
+  text-align: center;
+  padding: 20px;
+  color: #6b7280;
+  font-size: 14px;
+}
+
+.search-result-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.search-result-item {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: rgba(251, 255, 253, 0.92);
+  border: 1px solid rgba(167, 243, 208, 0.2);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.search-result-item:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(110, 231, 183, 0.35);
+  box-shadow: 0 4px 12px rgba(110, 231, 183, 0.15);
+}
+
+.result-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.result-main {
+  font-size: 14px;
+  color: #0f3d30;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 6px;
+}
+
+.result-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: #517d6d;
+}
+
+.result-status {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(16, 185, 129, 0.1);
+  color: #0f766e;
+}
+
+.result-arrow {
+  color: #9ca3af;
+  transition: transform 0.2s ease;
+}
+
+.search-result-item:hover .result-arrow {
+  transform: translateX(4px);
+  color: #166534;
+}
+
+.search-empty {
+  text-align: center;
+  padding: 32px 16px;
+  color: #6b7280;
+  font-size: 14px;
+  background: rgba(251, 255, 253, 0.75);
+  border: 1px dashed rgba(16, 185, 129, 0.16);
+  border-radius: 12px;
+}
+
+.load-more-btn {
+  width: 100%;
+  margin-top: 12px;
+  color: #0f766e;
+  border-radius: 8px;
+}
+
+.load-more-btn:hover {
+  background: rgba(16, 185, 129, 0.08);
 }
 </style>

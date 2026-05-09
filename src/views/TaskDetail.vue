@@ -191,11 +191,38 @@ const fetchTaskDetail = async () => {
   }
 }
 
+const checkAndStopAtClipEnd = (currentTime) => {
+  if (!clipEnd.value) return
+  if (currentTime >= clipEnd.value) {
+    playerRef.value?.pause()
+    clipEnd.value = 0
+  }
+}
+
+const handleVideoTimeUpdate = () => {
+  const video = getVideoElement()
+  if (!video) return
+  checkAndStopAtClipEnd(video.currentTime)
+}
+
+const handlePlyrTimeUpdate = () => {
+  const currentTime = playerRef.value?.currentTime
+  if (currentTime == null) return
+  checkAndStopAtClipEnd(currentTime)
+}
+
+const destroyPlayer = () => {
+  if (playerRef.value) {
+    playerRef.value.off('timeupdate', handlePlyrTimeUpdate)
+    playerRef.value.destroy()
+    playerRef.value = null
+  }
+}
+
 watch(
   () => route.params.id,
   () => {
-    playerRef.value?.destroy()
-    playerRef.value = null
+    destroyPlayer()
     floatingVisible.value = false
     clipEnd.value = 0
     activeNodeId.value = ''
@@ -263,20 +290,13 @@ const handleVideoEnded = () => {
   playerRef.value?.pause()
 }
 
-const handleVideoTimeUpdate = () => {
-  const video = getVideoElement()
-  if (!video || !clipEnd.value) return
-  if (video.currentTime >= clipEnd.value) {
-    playerRef.value?.pause()
-    clipEnd.value = 0
-  }
-}
 
 const initPlyr = () => {
   const video = getVideoElement()
   if (!video) return null
   if (!playerRef.value) {
     playerRef.value = new Plyr(video, { controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'fullscreen'], seekTime: 10, invertTime: false })
+    playerRef.value.on('timeupdate', handlePlyrTimeUpdate)
   }
   return syncPlyrSource()
 }
@@ -416,7 +436,7 @@ const submitMerge = async () => {
   }
 }
 
-onBeforeUnmount(() => { playerRef.value?.destroy(); playerRef.value = null })
+onBeforeUnmount(() => { destroyPlayer() })
 </script>
 
 <template>
